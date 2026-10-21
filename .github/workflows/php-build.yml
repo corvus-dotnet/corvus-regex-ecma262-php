@@ -258,7 +258,7 @@ jobs:
           $ext = Join-Path $dir "$env:NAME.dll"
           php -d "extension=$ext" -r 'echo PHP_VERSION, PHP_ZTS ? " ZTS" : " NTS", ": corvus-regex-ecma262 ", Corvus\RegexEcma262\crate_version(), "\n";'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          CORVUS_REGEX_PHP_EXTENSION="$ext" php -d "extension=$ext" tests/api.php
+          php -d "extension=$ext" tests/api.php
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:CORVUS_REGEX_PHP_EXTENSION = $ext
           php -d memory_limit=-1 -d "extension=$ext" tools/dataset.php ecma262-regex-test-data/data wrong-cases.tsv
