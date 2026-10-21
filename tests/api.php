@@ -140,7 +140,35 @@ throws('time limit, test', MatchLimitException::class, fn() => $slow->test($text
 throws('time limit, exec', MatchLimitException::class, fn() => $slow->exec($text, 0, 0.005));
 check('linear', false, (new Regex('^(a+)+$'))->test($text, 0, 1.0));
 
-check('crate version', '0.1.1', \Corvus\RegexEcma262\crate_version());
+// Nested classes on a small stack: with v a class holds classes, each a level of reading. On a stack of 256 KB the
+// deepest nesting allowed is read, compiled and matched, and deeper is refused as too large, rather than overflowing
+// the stack, which ends the process (as with the crate up to 0.1.1). PHP runs on the main thread, so a child is started
+// with ulimit -s; it loads the extension named by CORVUS_REGEX_PHP_EXTENSION, as CI gives it.
+$extension = getenv('CORVUS_REGEX_PHP_EXTENSION');
+if (PHP_OS_FAMILY === 'Windows' || $extension === false) {
+    echo "small stack: skipped (", PHP_OS_FAMILY === 'Windows' ? 'no ulimit on Windows' : 'CORVUS_REGEX_PHP_EXTENSION not set', ")\n";
+} else {
+    $code = <<<'CODE'
+        $nest = fn(int $depth) => str_repeat('[', $depth) . 'a' . str_repeat(']', $depth);
+        $out = [(new Corvus\RegexEcma262\Regex($nest(1000), 'v'))->test('a') ? 'matched' : 'not matched'];
+        foreach ([$nest(1001), str_repeat('[', 200000)] as $pattern) {
+            try {
+                new Corvus\RegexEcma262\Regex($pattern, 'v');
+                $out[] = 'compiled';
+            } catch (Corvus\RegexEcma262\PatternTooLargeException) {
+                $out[] = 'too large';
+            }
+        }
+        echo implode(', ', $out);
+        CODE;
+    $command = 'ulimit -s 256 && exec ' . escapeshellarg(PHP_BINARY) . ' -n -d ' . escapeshellarg("extension=$extension")
+        . ' -r ' . escapeshellarg($code);
+    exec('sh -c ' . escapeshellarg($command) . ' 2>&1', $lines, $status);
+    check('small stack, exit status', 0, $status);
+    check('small stack', 'matched, too large, too large', implode("\n", $lines));
+}
+
+check('crate version', '0.1.2', \Corvus\RegexEcma262\crate_version());
 check('extension loaded', true, extension_loaded('corvus_regex_ecma262'));
 
 echo "$checks checks, " . count($failures) . " failed\n";
