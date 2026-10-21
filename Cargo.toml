@@ -1,6 +1,6 @@
 [package]
 name = "corvus-regex-ecma262-php"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 rust-version = "1.89"
 description = "The corvus_regex_ecma262 PHP extension: the corvus-regex-ecma262 crate over PHP strings."
@@ -13,7 +13,7 @@ name = "corvus_regex_ecma262"
 crate-type = ["cdylib"]
 
 [dependencies]
-corvus-regex-ecma262 = "0.1.1"
+corvus-regex-ecma262 = "0.1.2"
 ext-php-rs = "0.16.0"
 
 [profile.release]
