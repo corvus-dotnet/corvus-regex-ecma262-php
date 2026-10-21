@@ -10,14 +10,17 @@
 // answers), the record's flags alone (the legacy answers) and, in the file that has them, the flags with v added (the
 // unicode_sets answers). A text is matched as Utf16 text (positions in code units, as the data gives them) and as a
 // UTF-8 string (positions in bytes); a text with a lone surrogate has no UTF-8 form and is matched as Utf16 alone.
-// Records marked v8_deviation are left out. Any difference from V8 is a wrong answer; a refusal of a valid pattern, an
-// acceptance of an invalid one, and a match that reaches its limit are counted apart and listed too. captures.jsonl is
-// judged on exec, the global search, the sticky flag, replace and split. A match is given 2 seconds.
+// Records and tests marked v8_deviation are left out, but for those marked unicode-version, where V8 has the Unicode of
+// 16 and test262 that of 17: the extension has Unicode 17, so they are judged by test262's verdicts (test262_valid) and
+// answers (test262_answer) in the grammars those name, and left out in the others. Any difference from V8 is a wrong
+// answer; a refusal of a valid pattern, an acceptance of an invalid one, and a match that reaches its limit are counted
+// apart and listed too. captures.jsonl is judged on exec, the global search, the sticky flag, replace and split. A
+// match is given 2 seconds.
 //
 // PHP's json_decode refuses a lone surrogate, which the data holds, so each lone surrogate escape is read as a code
-// point of Plane 15's private use area (U+F0000 + its offset from U+D800), which the data does not use (a line that
-// does is refused), and turned back into its code unit wherever the text is used. The workers are child processes of
-// this script, each given a share of a file's records.
+// point of Plane 15's private use area (U+F0800 + its offset from U+D800), which the data does not use (a line that
+// does is refused; test262 uses U+F0000, the first code point of the plane), and turned back into its code unit
+// wherever the text is used. The workers are child processes of this script, each given a share of a file's records.
 declare(strict_types=1);
 
 use Corvus\RegexEcma262\{InvalidPatternException, MatchLimitException, MatchResult, PatternTooLargeException, Regex,
@@ -30,14 +33,14 @@ const SURROGATE_ESCAPE = '/\\\\\\\\|\\\\u(d[89ab][0-9a-f]{2})\\\\u(d[c-f][0-9a-f
 /** The line with each lone surrogate escape written as the escape of its Plane 15 code point. */
 function readable(string $line): string
 {
-    if (preg_match('/\\\\udb8[01]|\xF3\xB0[\x80-\x9F]/i', $line)) {
-        throw new RuntimeException('the data uses U+F0000-U+F07FF, which the runner reads lone surrogates as');
+    if (preg_match('/\\\\udb8[23]|\xF3\xB0[\xA0-\xBF]/i', $line)) {
+        throw new RuntimeException('the data uses U+F0800-U+F0FFF, which the runner reads lone surrogates as');
     }
     return preg_replace_callback(SURROGATE_ESCAPE, function (array $m): string {
         if (!isset($m[3]) || $m[3] === '') {
             return $m[0];
         }
-        $v = 0xF0000 + hexdec($m[3]) - 0xD800 - 0x10000;
+        $v = 0xF0800 + hexdec($m[3]) - 0xD800 - 0x10000;
         return sprintf('\\u%04x\\u%04x', 0xD800 + ($v >> 10), 0xDC00 + ($v & 0x3FF));
     }, $line);
 }
@@ -48,8 +51,8 @@ function units(string $s): array
     $out = [];
     foreach (mb_str_split($s, 1, 'UTF-8') as $c) {
         $cp = mb_ord($c, 'UTF-8');
-        if ($cp >= 0xF0000 && $cp <= 0xF07FF) {
-            $out[] = 0xD800 + $cp - 0xF0000;
+        if ($cp >= 0xF0800 && $cp <= 0xF0FFF) {
+            $out[] = 0xD800 + $cp - 0xF0800;
         } elseif ($cp > 0xFFFF) {
             $v = $cp - 0x10000;
             $out[] = 0xD800 + ($v >> 10);
@@ -73,13 +76,13 @@ function utf16_bytes(string $s): string
 
 function lone(string $s): bool
 {
-    return (bool) preg_match('/[\x{F0000}-\x{F07FF}]/u', $s);
+    return (bool) preg_match('/[\x{F0800}-\x{F0FFF}]/u', $s);
 }
 
 /** UTF-8, a lone surrogate as U+FFFD (as String::from_utf16_lossy writes it). */
 function utf8_lossy(string $s): string
 {
-    return preg_replace('/[\x{F0000}-\x{F07FF}]/u', "\u{FFFD}", $s);
+    return preg_replace('/[\x{F0800}-\x{F0FFF}]/u', "\u{FFFD}", $s);
 }
 
 function escape(string $s): string
@@ -157,11 +160,32 @@ function modes_of(array $r): array
     return $modes;
 }
 
+/** Whether a deviation is judged by test262's answers: one of the Unicode version, which the extension has as
+ * test262 has it. */
+function by_test262(array $marked): bool
+{
+    return ($marked['deviation'] ?? null) === 'unicode-version';
+}
+
+/** Whether a record is left out: one marked v8_deviation that is not judged by test262's answers. */
+function skipped_record(array $r): bool
+{
+    return ($r['v8_deviation'] ?? false) === true && !by_test262($r);
+}
+
 function judge_tests(string $name, array $r, string $pattern, Counts $c, array &$w): void
 {
     $flags = (string) ($r['flags'] ?? '');
     $headPattern = shown($pattern);
+    // A record marked for the Unicode version is judged in the grammars test262 gives a verdict for, by it.
+    $recordByTest262 = ($r['v8_deviation'] ?? false) === true && by_test262($r);
     foreach (modes_of($r) as [$suffix, $answer, $valid]) {
+        if ($recordByTest262) {
+            $valid = $r['test262_valid'][$answer] ?? null;
+            if (!is_bool($valid)) {
+                continue;
+            }
+        }
         $modeFlags = $flags . $suffix;
         $head = "$name\t/$headPattern/$modeFlags";
         [$re, $message, $isError] = compile_pattern($pattern, $modeFlags);
@@ -181,7 +205,14 @@ function judge_tests(string $name, array $r, string $pattern, Counts $c, array &
             continue;
         }
         foreach ($r['tests'] ?? [] as $test) {
-            $expected = $test[$answer] ?? null;
+            // A test marked for the Unicode version, or any test of a record so marked, is judged by test262's
+            // answer in this grammar, and left out where it has none. A test marked otherwise is left out.
+            $marked = ($test['v8_deviation'] ?? false) === true;
+            if ($marked && !by_test262($test)) {
+                continue;
+            }
+            $answers = $marked || $recordByTest262 ? $test['test262_answer'] ?? [] : $test;
+            $expected = $answers[$answer] ?? null;
             $text = $test['text'] ?? null;
             if (!is_bool($expected) || $text === null) {
                 continue;
@@ -393,7 +424,7 @@ function judge_lines(string $name, array $lines, int $k, int $n): array
             continue;
         }
         $r = json_decode(readable($line), true, 512, JSON_THROW_ON_ERROR);
-        if (!empty($r['v8_deviation'])) {
+        if (skipped_record($r)) {
             $skipped++;
             continue;
         }
