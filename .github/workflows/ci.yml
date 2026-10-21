@@ -1,0 +1,38 @@
+# Format and clippy (warnings denied) and the version, then every build of the extension, each tested with the
+# ECMA-262 test data through the packaged build (php-build.yml).
+name: ci
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Format and clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup PHP
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.4'
+          coverage: none
+          tools: none
+      - name: Format and clippy
+        # The toolchain is named here rather than in a rust-toolchain.toml, which would override the nightly the
+        # Windows builds need.
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal -c clippy -c rustfmt
+          cargo +1.98.0 fmt --check
+          cargo +1.98.0 clippy -j 4 --locked --all-targets -- -D warnings
+
+  builds:
+    name: Builds
+    uses: ./.github/workflows/php-build.yml

@@ -1,0 +1,22 @@
+[package]
+name = "corvus-regex-ecma262-php"
+version = "0.1.1"
+edition = "2024"
+rust-version = "1.89"
+description = "The corvus_regex_ecma262 PHP extension: the corvus-regex-ecma262 crate over PHP strings."
+license = "Apache-2.0"
+repository = "https://github.com/corvus-dotnet/corvus-regex-ecma262-php"
+publish = false
+
+[lib]
+name = "corvus_regex_ecma262"
+crate-type = ["cdylib"]
+
+[dependencies]
+corvus-regex-ecma262 = "0.1.1"
+ext-php-rs = "0.16.0"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+strip = true

@@ -1,0 +1,25 @@
+{
+    "name": "corvus-dotnet/corvus-regex-ecma262",
+    "description": "ECMA-262 (JavaScript) regular expressions as a PHP extension: the grammar and the answers of RegExp, every flag, UTF-8 and UTF-16, backed by Rust.",
+    "type": "php-ext",
+    "license": "Apache-2.0",
+    "keywords": ["regex", "regexp", "ecmascript", "javascript", "ecma262", "extension"],
+    "homepage": "https://github.com/corvus-dotnet/corvus-regex-ecma262-php",
+    "support": {
+        "issues": "https://github.com/corvus-dotnet/corvus-regex-ecma262-php/issues",
+        "source": "https://github.com/corvus-dotnet/corvus-regex-ecma262-php"
+    },
+    "authors": [
+        {
+            "name": "endjin",
+            "homepage": "https://endjin.com"
+        }
+    ],
+    "require": {
+        "php": ">=8.2"
+    },
+    "php-ext": {
+        "extension-name": "corvus_regex_ecma262",
+        "download-url-method": ["pre-packaged-binary"]
+    }
+}

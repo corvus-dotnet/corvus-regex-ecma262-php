@@ -1,0 +1,73 @@
+name: php-publish
+# Attaches every build of the corvus_regex_ecma262 PHP extension to a GitHub release when it is published, named as
+# PIE looks for them, all built and tested by php-build.yml. Packagist reads the package from this repository (its
+# composer.json) and its versions from its tags, so a release is tagged with the version alone (0.1.1, as Composer and
+# PIE read it), which must be the version in Cargo.toml. `pie install corvus-dotnet/corvus-regex-ecma262` then
+# downloads the build for the PHP it installs into. A run that fails part of the way can be run again: uploading
+# replaces archives of the same names.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: php-publish
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Version to publish
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Check the tag is the version
+        id: check
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "$TAG" != "$version" ]; then
+            echo "::error::The release's tag is $TAG but Cargo.toml says $version (the tag must be $version, as Composer reads it)."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build
+    needs: version
+    uses: ./.github/workflows/php-build.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+
+  publish:
+    name: Attach the builds to the release
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # upload the release's assets
+    steps:
+      - name: Download
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: php-*
+          path: dist
+          merge-multiple: true
+      - name: Check the archives
+        # Four PHP versions, each NTS and ZTS, on Linux (glibc and musl, x86_64 and arm64), macOS (arm64) and Windows
+        # (x86_64): 48 archives, all of this version.
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          ls -l dist
+          [ "$(ls dist/php_corvus_regex_ecma262-"$VERSION"*.zip | wc -l)" -eq 48 ]
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" dist/*.zip --clobber -R "${{ github.repository }}"
