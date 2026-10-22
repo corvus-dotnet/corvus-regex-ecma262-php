@@ -258,7 +258,8 @@ function main(array $argv): int
             $count = $line['count'] ?? null;
             $entry = ['median' => round($m, 1), 'min' => $sorted[0], 'max' => $sorted[$n - 1], 'count' => $count,
                 'rounds' => $n, 'spread' => round($spread, 4), 'each' => $each];
-            $oracle = $figures['v8'][$k]['line']['count'] ?? null;
+            // Without V8 in the run (V8=0), its count as the workloads carry it (v8Count, from the central run).
+            $oracle = isset($figures['v8']) ? ($figures['v8'][$k]['line']['count'] ?? null) : ($workloads[$k]['v8Count'] ?? null);
             if ($oracle !== null && $count !== $oracle && $e !== 'v8') {
                 $differ[] = "$e $wid $count vs V8 $oracle";
                 fprintf(STDERR, "COUNT  %-13s %-62s %s against V8's %s\n", $e, $wid, $count, $oracle);
