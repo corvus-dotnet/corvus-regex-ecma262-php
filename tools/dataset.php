@@ -15,8 +15,11 @@
 // judged on exec, the global search, the sticky flag, replace and split. A match is given 2 seconds.
 //
 // PHP's json_decode refuses a lone surrogate, which the data holds, so each lone surrogate escape is read as a code
-// point of Plane 15's private use area (U+F0000 + its offset from U+D800), which the data does not use (a line that
-// does is refused), and turned back into its code unit wherever the text is used. The workers are child processes of
+// point of a block of 2,048 private use code points (the block's first + its offset from U+D800) and turned back into
+// its code unit wherever the text is used. The block is chosen for each line from the blocks of Planes 15 and 16: the
+// first whose code points the line does not hold, which is known when the line, read with that block, holds as many
+// of them as it had lone surrogate escapes. So no character of the data is taken for a lone surrogate (test262's
+// texts hold the ends of the private use ranges). The workers are child processes of
 // this script, each given a share of a file's records.
 declare(strict_types=1);
 
@@ -27,29 +30,72 @@ const LIMIT = 2.0;
 const REPLACEMENT = '<$&|$1|$2|$10|$<a>|$$|$`|$\'>';
 const SURROGATE_ESCAPE = '/\\\\\\\\|\\\\u(d[89ab][0-9a-f]{2})\\\\u(d[c-f][0-9a-f]{2})|\\\\u(d[89a-f][0-9a-f]{2})/i';
 
-/** The line with each lone surrogate escape written as the escape of its Plane 15 code point. */
-function readable(string $line): string
+/** The first code point of the block the lone surrogates of the line being judged are read as. */
+$BLOCK = 0xF0000;
+
+/** The record of a line, its lone surrogates read as code points of the first block the line does not use. */
+function read_record(string $line): array
 {
-    if (preg_match('/\\\\udb8[01]|\xF3\xB0[\x80-\x9F]/i', $line)) {
-        throw new RuntimeException('the data uses U+F0000-U+F07FF, which the runner reads lone surrogates as');
-    }
-    return preg_replace_callback(SURROGATE_ESCAPE, function (array $m): string {
-        if (!isset($m[3]) || $m[3] === '') {
-            return $m[0];
+    global $BLOCK;
+    $blocks = array_merge(range(0xF0000, 0xFF000, 0x800), range(0x100000, 0x10F000, 0x800));
+    foreach ($blocks as $block) {
+        $written = 0;
+        $rewritten = preg_replace_callback(SURROGATE_ESCAPE, function (array $m) use ($block, &$written): string {
+            if (!isset($m[3]) || $m[3] === '') {
+                return $m[0];
+            }
+            $written++;
+            $v = $block + hexdec($m[3]) - 0xD800 - 0x10000;
+            return sprintf('\\u%04x\\u%04x', 0xD800 + ($v >> 10), 0xDC00 + ($v & 0x3FF));
+        }, $line);
+        $r = json_decode($rewritten, true, 512, JSON_THROW_ON_ERROR);
+        if (count_in($r, $block) === $written) {
+            $BLOCK = $block;
+            return $r;
         }
-        $v = 0xF0000 + hexdec($m[3]) - 0xD800 - 0x10000;
-        return sprintf('\\u%04x\\u%04x', 0xD800 + ($v >> 10), 0xDC00 + ($v & 0x3FF));
-    }, $line);
+    }
+    throw new RuntimeException('every block of Planes 15 and 16 is used by the line');
+}
+
+/** How many code points of a block the strings of a value hold. */
+function count_in(mixed $value, int $block): int
+{
+    if (is_string($value)) {
+        $n = 0;
+        foreach (mb_str_split($value, 1, 'UTF-8') as $c) {
+            $cp = mb_ord($c, 'UTF-8');
+            if ($cp >= $block && $cp < $block + 0x800) {
+                $n++;
+            }
+        }
+        return $n;
+    }
+    if (is_array($value)) {
+        $n = 0;
+        foreach ($value as $k => $v) {
+            $n += (is_string($k) ? count_in($k, $block) : 0) + count_in($v, $block);
+        }
+        return $n;
+    }
+    return 0;
+}
+
+/** The lone surrogates of the line being judged, as a character class of their block. */
+function lone_class(): string
+{
+    global $BLOCK;
+    return sprintf('/[\\x{%X}-\\x{%X}]/u', $BLOCK, $BLOCK + 0x7FF);
 }
 
 /** The UTF-16 code units of a text as read. */
 function units(string $s): array
 {
+    global $BLOCK;
     $out = [];
     foreach (mb_str_split($s, 1, 'UTF-8') as $c) {
         $cp = mb_ord($c, 'UTF-8');
-        if ($cp >= 0xF0000 && $cp <= 0xF07FF) {
-            $out[] = 0xD800 + $cp - 0xF0000;
+        if ($cp >= $BLOCK && $cp < $BLOCK + 0x800) {
+            $out[] = 0xD800 + $cp - $BLOCK;
         } elseif ($cp > 0xFFFF) {
             $v = $cp - 0x10000;
             $out[] = 0xD800 + ($v >> 10);
@@ -73,13 +119,13 @@ function utf16_bytes(string $s): string
 
 function lone(string $s): bool
 {
-    return (bool) preg_match('/[\x{F0000}-\x{F07FF}]/u', $s);
+    return (bool) preg_match(lone_class(), $s);
 }
 
 /** UTF-8, a lone surrogate as U+FFFD (as String::from_utf16_lossy writes it). */
 function utf8_lossy(string $s): string
 {
-    return preg_replace('/[\x{F0000}-\x{F07FF}]/u', "\u{FFFD}", $s);
+    return preg_replace(lone_class(), "\u{FFFD}", $s);
 }
 
 function escape(string $s): string
@@ -392,7 +438,7 @@ function judge_lines(string $name, array $lines, int $k, int $n): array
         if ($i % $n !== $k || trim($line) === '') {
             continue;
         }
-        $r = json_decode(readable($line), true, 512, JSON_THROW_ON_ERROR);
+        $r = read_record($line);
         if (!empty($r['v8_deviation'])) {
             $skipped++;
             continue;
