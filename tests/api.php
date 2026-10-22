@@ -140,6 +140,56 @@ throws('time limit, test', MatchLimitException::class, fn() => $slow->test($text
 throws('time limit, exec', MatchLimitException::class, fn() => $slow->exec($text, 0, 0.005));
 check('linear', false, (new Regex('^(a+)+$'))->test($text, 0, 1.0));
 
+// The match timeout of a pattern, which every method honours
+$never = '^(?:(a+)\1*)+$';
+$long = str_repeat('a', 60) . 'b';
+$timed = new Regex($never, 'u', 0.03);
+check('timeout', 0.03, $timed->timeout());
+foreach ([
+    'test' => fn() => $timed->test($long),
+    'exec' => fn() => $timed->exec($long),
+    'matchAll' => fn() => $timed->matchAll($long),
+    'countMatches' => fn() => $timed->countMatches($long),
+    'replace' => fn() => $timed->replace($long, 'x'),
+    'replaceAll' => fn() => $timed->replaceAll($long, 'x'),
+    'replace, callable' => fn() => $timed->replace($long, fn($m) => 'x'),
+    'split' => fn() => $timed->split($long),
+    'split, limit' => fn() => $timed->split($long, 2),
+    'test, utf16' => fn() => $timed->test(u16($long)),
+    'matchAll, utf16' => fn() => $timed->matchAll(u16($long)),
+    'replace, utf16' => fn() => $timed->replace(u16($long), 'x'),
+    'replace, utf16 template' => fn() => $timed->replace(u16($long), u16('x')),
+    'split, utf16' => fn() => $timed->split(u16($long)),
+] as $what => $f) {
+    throws("the timeout, $what", MatchLimitException::class, $f);
+}
+check('answered within the timeout', true, $timed->test('aaaa'));
+check('replace within the timeout', '<aaaa>', $timed->replace('aaaa', '<$&>'));
+check('a limit of its own, none', true, (new Regex('^(a+)\1$', '', 0.000001))->test('aaaa', 0, 0.0));
+throws('a limit of its own', MatchLimitException::class, fn() => (new Regex($never, 'u', 3600.0))->test($long, 0, 0.03));
+try {
+    (new Regex('(?:a?){2147483647}', '', 3600.0))->test('');
+    check('the memory cap', 'thrown', 'nothing thrown');
+} catch (MatchLimitException $e) {
+    check('the memory cap', true, str_contains($e->getMessage(), 'memory'));
+}
+check('no default timeout', null, Regex::defaultTimeout());
+check('no timeout', null, (new Regex('a'))->timeout());
+Regex::setDefaultTimeout(0.03);
+try {
+    check('default timeout', 0.03, Regex::defaultTimeout());
+    $defaulted = new Regex($never, 'u');
+    $own = new Regex('a', '', 5.0);
+    $none = new Regex('a', '', 0.0);
+} finally {
+    Regex::setDefaultTimeout(null);
+}
+check('default timeout, reset', null, Regex::defaultTimeout());
+check('a pattern takes the default', 0.03, $defaulted->timeout());
+throws('the default timeout', MatchLimitException::class, fn() => $defaulted->test($long));
+check('a pattern keeps its own', 5.0, $own->timeout());
+check('a pattern with none', null, $none->timeout());
+
 // Nested classes on a small stack: with v a class holds classes, each a level of reading. On a stack of 256 KB the
 // deepest nesting allowed is read, compiled and matched, and deeper is refused as too large, rather than overflowing
 // the stack, which ends the process (as with the crate up to 0.1.1). PHP runs on the main thread, so a child is started
@@ -168,7 +218,7 @@ if (PHP_OS_FAMILY === 'Windows' || $extension === false) {
     check('small stack', 'matched, too large, too large', implode("\n", $lines));
 }
 
-check('crate version', '0.1.2', \Corvus\RegexEcma262\crate_version());
+check('crate version', '0.2.0', \Corvus\RegexEcma262\crate_version());
 check('extension loaded', true, extension_loaded('corvus_regex_ecma262'));
 
 echo "$checks checks, " . count($failures) . " failed\n";

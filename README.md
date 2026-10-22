@@ -13,8 +13,9 @@ builds for PHP 8.2 to 8.5 (NTS and ZTS) on Linux (glibc and musl, x86_64 and arm
   `(?i:...)`, and every Unicode property ECMA-262 lists, from Unicode 17 tables the crate carries.
 - UTF-8 strings, with positions in bytes as PCRE's functions give them, and UTF-16 text (`Utf16`), with positions in
   code units as JavaScript gives them. A pattern answers as it does in a browser or Node, which PCRE does not.
-- A pattern without a backreference is matched in time proportional to its size times the text, and `test` and
-  `exec` take a timeout, so neither a pattern nor a text from outside can make a program hang.
+- A pattern without a backreference is matched in time proportional to its size times the text, and a pattern can be
+  given a match timeout, as a `Regex` of .NET can, which every method honours and which caps the backtracking memory
+  too, so with a timeout neither a pattern nor a text from outside can make a program hang.
 
 **Compliance.** Over the [ECMA-262 test data](https://github.com/corvus-dotnet/ecma262-regex-test-data) (what V8 says
 about 117,889 patterns and 5,884,566 texts, test262's and `exec`, the global search, `replace` and `split` among
@@ -61,7 +62,8 @@ $date->exec(Utf16::fromUtf8('café 2026-12'))->start();   // 5
 
 | | |
 |---|---|
-| `new Regex($pattern, $flags = '')` | Compiles a pattern as `new RegExp($pattern, $flags)` does. |
+| `new Regex($pattern, $flags = '', $timeout = null)` | Compiles a pattern as `new RegExp($pattern, $flags)` does. `$timeout` is the match timeout in seconds (0 for none; `null` for the default). |
+| `Regex::setDefaultTimeout($seconds)`, `Regex::defaultTimeout()` | The timeout of every pattern compiled without one: `null` (no limit) unless set. |
 | `Regex::isValid($pattern, $flags = '')` | Whether a pattern is valid, without compiling it. |
 | `test($subject, $offset = 0, $timeout = null)` | `RegExp.prototype.test` with `lastIndex` at `$offset` (at `$offset` alone with `y`). |
 | `exec($subject, $offset = 0, $timeout = null)` | The first match at or after `$offset`, as `exec` finds it: a `MatchResult`, or `null`. |
@@ -70,7 +72,7 @@ $date->exec(Utf16::fromUtf8('café 2026-12'))->start();   // 5
 | `replace($subject, $replacement)` | `String.prototype.replace`: the first match, or every match with `g`; a template or a callable. |
 | `replaceAll($subject, $replacement)` | `String.prototype.replaceAll`: every match. |
 | `split($subject, $limit = null)` | `String.prototype.split`: an array of strings, `null` for a group that did not take part. |
-| `source()`, `flags()`, `groupCount()`, `groupNames()` | What the pattern is. |
+| `source()`, `flags()`, `timeout()`, `groupCount()`, `groupNames()` | What the pattern is. |
 
 A `MatchResult` has `group($g = 0)`, `start($g = 0)` and `end($g = 0)` (a group by number or name; `null` when it did
 not take part), `groups()` (the array `preg_match` fills: the match, then each group) and `namedGroups()`. A subject is
@@ -81,6 +83,12 @@ Multilingual Plane; such a position is the character's third byte, and the half 
 
 **Errors.** `InvalidPatternException`, `InvalidFlagsException`, `PatternTooLargeException` and `MatchLimitException`
 (a match that reached its timeout or its cap on backtracking memory) are each a `RegexException`, an `Exception`.
+
+**Timeouts.** A pattern has a match timeout, as a `Regex` of .NET has: `new Regex($pattern, $flags, 1.0)`, or for every
+pattern compiled after it `Regex::setDefaultTimeout(1.0)`. Every method that matches gives each of its matches the
+timeout and throws `MatchLimitException` at it; `test` and `exec` take a `$timeout` of their own in its place. Without
+a timeout (the default) a match has no limit of time or of memory, so a program that matches a pattern or a subject it
+did not write should set one.
 
 ## Benchmarks
 

@@ -75,6 +75,11 @@ fn limit_of(timeout: Option<f64>) -> Option<Duration> {
     timeout.map(|t| Duration::from_secs_f64(t.max(0.0)))
 }
 
+/// A timeout in seconds, null for none.
+fn seconds_of(timeout: Option<Duration>) -> Option<f64> {
+    timeout.map(|t| t.as_secs_f64())
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Text
 
@@ -304,17 +309,17 @@ impl Regex {
         Ok(match view {
             View::Utf8(s) => {
                 let caps = match limit {
-                    Some(l) => self.inner.try_captures_at(s, start, l).map_err(limit_error)?,
+                    Some(l) => self.inner.captures_at_within(s, start, l),
                     None => self.inner.captures_at(s, start),
                 };
-                caps.map(|c| MatchResult::of(&c, view, self))
+                caps.map_err(limit_error)?.map(|c| MatchResult::of(&c, view, self))
             }
             View::Utf16(u) => {
                 let caps = match limit {
-                    Some(l) => self.inner.try_captures_at_utf16(u, start, l).map_err(limit_error)?,
+                    Some(l) => self.inner.captures_at_within_utf16(u, start, l),
                     None => self.inner.captures_at_utf16(u, start),
                 };
-                caps.map(|c| MatchResult::of(&c, view, self))
+                caps.map_err(limit_error)?.map(|c| MatchResult::of(&c, view, self))
             }
         })
     }
@@ -365,6 +370,7 @@ impl Regex {
                     let template = std::str::from_utf8(template)
                         .map_err(|e| value_error(format!("the replacement is not valid UTF-8: {e}")))?;
                     let out = if all { self.inner.replace_all(s, template) } else { self.inner.replace(s, template) };
+                    let out = out.map_err(limit_error)?;
                     let mut z = Zval::new();
                     z.set_string(&out, false)?;
                     Ok(z)
@@ -378,6 +384,7 @@ impl Regex {
                     } else {
                         self.inner.replace_utf16(u, &template)
                     };
+                    let out = out.map_err(limit_error)?;
                     Utf16 { units: Arc::new(out.into_owned()) }.into_zval(false).map_err(Into::into)
                 }
             };
@@ -388,6 +395,7 @@ impl Regex {
             };
             let out =
                 if all { self.inner.replace_all_utf16(u, &t.units) } else { self.inner.replace_utf16(u, &t.units) };
+            let out = out.map_err(limit_error)?;
             return Utf16 { units: Arc::new(out.into_owned()) }.into_zval(false).map_err(Into::into);
         }
         let callable =
@@ -443,9 +451,17 @@ impl Regex {
 #[php_impl]
 impl Regex {
     /// Compiles a pattern with the flags `new RegExp($pattern, $flags)` takes, any of dgimsuvy. Throws
-    /// InvalidPatternException, InvalidFlagsException or PatternTooLargeException (each a RegexException).
-    pub fn __construct(pattern: &str, flags: Option<&str>) -> PhpResult<Regex> {
-        let inner = ecma::Regex::new(pattern, flags.unwrap_or("")).map_err(compile_error)?;
+    /// InvalidPatternException, InvalidFlagsException or PatternTooLargeException (each a RegexException). $timeout is
+    /// the time in seconds each match may take before it is abandoned with MatchLimitException (0 for none); null takes
+    /// Regex::defaultTimeout(), which is none unless set. A timeout also caps the backtracking memory of a match;
+    /// without one a match has no limit of time or of memory, so give a pattern or a text from outside one.
+    pub fn __construct(pattern: &str, flags: Option<&str>, timeout: Option<f64>) -> PhpResult<Regex> {
+        let flags = flags.unwrap_or("");
+        let inner = match limit_of(timeout) {
+            None => ecma::Regex::new(pattern, flags),
+            Some(t) => ecma::Flags::parse(flags).and_then(|f| ecma::Regex::with_timeout(pattern, f, Some(t))),
+        }
+        .map_err(compile_error)?;
         let written = format!("{}", inner.flags());
         let names = inner.group_names().map(str::to_owned).collect();
         Ok(Regex {
@@ -454,6 +470,23 @@ impl Regex {
             inner: Arc::new(inner),
             names: Arc::new(names),
         })
+    }
+
+    /// Sets the timeout of every Regex made from now on without one of its own: seconds, or null (or 0) for no limit,
+    /// the default. It is the process-wide default of .NET's REGEX_DEFAULT_MATCH_TIMEOUT; a program that matches
+    /// patterns or subjects from outside should set one when it starts. A Regex already made keeps its own.
+    pub fn set_default_timeout(seconds: Option<f64>) {
+        ecma::set_default_match_timeout(limit_of(seconds));
+    }
+
+    /// The timeout in seconds of a Regex made now without one of its own, or null for no limit.
+    pub fn default_timeout() -> Option<f64> {
+        seconds_of(ecma::default_match_timeout())
+    }
+
+    /// The time in seconds each match may take before it is abandoned with MatchLimitException, or null for none.
+    pub fn timeout(&self) -> Option<f64> {
+        seconds_of(self.inner.match_timeout())
     }
 
     /// Whether a pattern is valid with the flags, without compiling it.
@@ -482,22 +515,25 @@ impl Regex {
     }
 
     /// Whether the pattern matches at or after $offset (at $offset alone with the y flag), as RegExp.prototype.test
-    /// with lastIndex set to it. With a timeout in seconds, a match that reaches it throws MatchLimitException.
+    /// with lastIndex set to it. A match that reaches the pattern's timeout throws MatchLimitException; a timeout in
+    /// seconds here takes its place for this match (0 for none).
     pub fn test(&self, subject: &Zval, offset: Option<i64>, timeout: Option<f64>) -> PhpResult<bool> {
         let text = subject_of(subject)?;
         let view = text.view();
         let Some(start) = Regex::start_of(view, offset.unwrap_or(0))? else { return Ok(false) };
         let inner = &self.inner;
         match (view, limit_of(timeout)) {
-            (View::Utf8(s), None) => Ok(inner.is_match_at(s, start)),
-            (View::Utf16(u), None) => Ok(inner.is_match_at_utf16(u, start)),
-            (View::Utf8(s), Some(l)) => inner.try_find_at(s, start, l).map(|m| m.is_some()).map_err(limit_error),
-            (View::Utf16(u), Some(l)) => inner.try_find_at_utf16(u, start, l).map(|m| m.is_some()).map_err(limit_error),
+            (View::Utf8(s), None) => inner.is_match_at(s, start).map_err(limit_error),
+            (View::Utf16(u), None) => inner.is_match_at_utf16(u, start).map_err(limit_error),
+            (View::Utf8(s), Some(l)) => inner.find_at_within(s, start, l).map(|m| m.is_some()).map_err(limit_error),
+            (View::Utf16(u), Some(l)) => {
+                inner.find_at_within_utf16(u, start, l).map(|m| m.is_some()).map_err(limit_error)
+            }
         }
     }
 
-    /// The first match at or after $offset, as exec finds it with lastIndex set to it: a MatchResult, or null. With a
-    /// timeout in seconds, a match that reaches it throws MatchLimitException.
+    /// The first match at or after $offset, as exec finds it with lastIndex set to it: a MatchResult, or null. A match
+    /// that reaches the pattern's timeout throws MatchLimitException; a timeout in seconds here takes its place.
     pub fn exec(&self, subject: &Zval, offset: Option<i64>, timeout: Option<f64>) -> PhpResult<Option<MatchResult>> {
         let text = subject_of(subject)?;
         let view = text.view();
@@ -506,7 +542,8 @@ impl Regex {
     }
 
     /// Every match of a global search, as matchAll makes one: an array of MatchResult. After an empty match the
-    /// search goes on one character later, and with the y flag each match must start where the one before ended.
+    /// search goes on one character later, and with the y flag each match must start where the one before ended. A
+    /// match that reaches the pattern's timeout throws MatchLimitException.
     pub fn match_all(&self, subject: &Zval) -> PhpResult<Vec<MatchResult>> {
         let text = subject_of(subject)?;
         let view = text.view();
@@ -525,10 +562,11 @@ impl Regex {
     /// The number of matches of a global search, without making them.
     pub fn count_matches(&self, subject: &Zval) -> PhpResult<i64> {
         let text = subject_of(subject)?;
-        Ok(match text.view() {
-            View::Utf8(s) => self.inner.find_iter(s).count(),
-            View::Utf16(u) => self.inner.find_iter_utf16(u).count(),
-        } as i64)
+        let counted = match text.view() {
+            View::Utf8(s) => self.inner.find_iter(s).try_fold(0i64, |n, m| m.map(|_| n + 1)),
+            View::Utf16(u) => self.inner.find_iter_utf16(u).try_fold(0i64, |n, m| m.map(|_| n + 1)),
+        };
+        counted.map_err(limit_error)
     }
 
     /// The subject with the first match replaced, or every match with the g flag, as String.prototype.replace replaces
@@ -558,7 +596,8 @@ impl Regex {
                 let pieces = match limit {
                     Some(n) => self.inner.splitn(s, n),
                     None => self.inner.split(s),
-                };
+                }
+                .map_err(limit_error)?;
                 pieces
                     .into_iter()
                     .map(|p| match p {
@@ -575,7 +614,8 @@ impl Regex {
                 let pieces = match limit {
                     Some(n) => self.inner.splitn_utf16(u, n),
                     None => self.inner.split_utf16(u),
-                };
+                }
+                .map_err(limit_error)?;
                 pieces
                     .into_iter()
                     .map(|p| match p {
@@ -592,7 +632,7 @@ impl Regex {
 #[php_function]
 #[php(name = "Corvus\\RegexEcma262\\crate_version")]
 pub fn crate_version() -> &'static str {
-    "0.1.2"
+    "0.2.0"
 }
 
 #[php_module]
