@@ -26,14 +26,20 @@ if [ -z "$data" ]; then
   data="$work/test-data/data"
 fi
 php -d memory_limit=-1 ${CORVUS_REGEX_PHP_EXTENSION:+-d extension=$CORVUS_REGEX_PHP_EXTENSION} tools/dataset.php "$data" "$work/wrong-corvus.tsv" > "$work/compliance-corvus.txt" 2>&1 || true
-node tools/benchmarks/v8/dataset.mjs "$data" > "$work/compliance-v8.txt" 2>&1 || true
+# V8=0 (the central run, for every image but one): no V8, whose counts the workloads carry (v8Count).
+v8=(--v8 tools/benchmarks/v8/industry.mjs)
+if [ "${V8:-1}" = 0 ]; then
+  v8=()
+else
+  node tools/benchmarks/v8/dataset.mjs "$data" > "$work/compliance-v8.txt" 2>&1 || true
+fi
 tail -n 1 "$work"/compliance-*.txt
 if [ "${SETTLE:-0}" -gt 0 ]; then
   echo "settling for $SETTLE s"
   sleep "$SETTLE"
 fi
 export CORVUS_REGEX_TEXTS="$texts"
-timed php ${CORVUS_REGEX_PHP_EXTENSION:+-d extension=$CORVUS_REGEX_PHP_EXTENSION} tools/bench/industry.php "$workloads" --v8 tools/benchmarks/v8/industry.mjs --rounds "$rounds" \
+timed php ${CORVUS_REGEX_PHP_EXTENSION:+-d extension=$CORVUS_REGEX_PHP_EXTENSION} tools/bench/industry.php "$workloads" "${v8[@]}" --rounds "$rounds" \
   --seconds "$seconds" --passes "$passes" --spread "$spread" --out "$work/run.json" 2> "$work/run.log"
 grep -E '^(SPREAD|COUNT) ' "$work/run.log" || true
 python3 tools/bench/industry-results.py --workloads "$workloads" --run "$work/run.json" --out "$out_file" \
