@@ -218,7 +218,7 @@ if (PHP_OS_FAMILY === 'Windows' || $extension === false) {
     check('small stack', 'matched, too large, too large', implode("\n", $lines));
 }
 
-check('crate version', '0.2.0', \Corvus\RegexEcma262\crate_version());
+check('crate version', '0.2.1', \Corvus\RegexEcma262\crate_version());
 check('extension loaded', true, extension_loaded('corvus_regex_ecma262'));
 
 echo "$checks checks, " . count($failures) . " failed\n";
