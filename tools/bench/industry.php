@@ -7,12 +7,13 @@
 //       [--rounds 3] [--seconds 0.7] [--passes 7] [--spread 0.05] [--filter <substring of the id>] [--out <json>]
 //
 // The workloads are the outer loop, each workload's rounds next and the engines innermost, their order turned by one
-// each round, so that a workload's rounds are seconds apart, as its engines are. Each figure is a child process of
-// its own (`industry.php --one`, or `node industry.mjs --one` for V8), which warms for two fifths of its seconds, then
+// each round, so that a workload's rounds are seconds apart, as its engines are. Each figure is a child process of its
+// own (`industry.php --one`, or `node industry.mjs --one` for V8), which warms for two fifths of its seconds, then
 // times `passes` passes of as many counts as fit the rest and reports their median. A workload's figure for an engine
-// is the median of its rounds, with the fastest and the slowest round as its spread; a figure whose spread, (slowest
-// - fastest) / median, is over --spread is listed in the run's facts (spread_over) and on stderr. A child that does
-// not finish in two minutes is stopped and recorded as such.
+// is the median of its rounds, with the fastest and the slowest round as its spread; a figure whose spread, (slowest -
+// fastest) / median, is over --spread is listed in the run's facts (spread_over) and on stderr. A figure that does not
+// finish in 30 s is stopped and recorded as giving no result within 30 s, and is not run in the workload's later
+// rounds.
 //
 // The engines, each counting the matches of a global search as a PHP program counts them:
 // - corvus-utf8 and corvus-utf16: this extension with the workload's flags and u, over the text as a string and as
@@ -121,6 +122,9 @@ function one(string $path, int $index, string $engine, float $seconds, int $pass
         'reps' => $reps];
 }
 
+/** A figure stopped at the limit, which the page shows as giving no result within 30 s. */
+const STOPPED = ['error' => 'did not produce a result within 30 s', 'limit' => 30];
+
 /** One figure in a child process: the child's line of JSON, or one with the error. */
 function figure(?string $v8, string $path, int $index, string $spec, string $seconds, string $passes): array
 {
@@ -137,7 +141,7 @@ function figure(?string $v8, string $path, int $index, string $spec, string $sec
     $proc = proc_open($cmd, [1 => ['pipe', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes);
     stream_set_blocking($pipes[1], false);
     $out = '';
-    $deadline = microtime(true) + 120;
+    $deadline = microtime(true) + 30;
     while (true) {
         $read = [$pipes[1]];
         $write = $except = null;
@@ -145,7 +149,7 @@ function figure(?string $v8, string $path, int $index, string $spec, string $sec
         if ($left <= 0) {
             proc_terminate($proc, 9);
             proc_close($proc);
-            return ['error' => 'did not finish in two minutes'];
+            return STOPPED;
         }
         if (stream_select($read, $write, $except, (int) ceil($left)) > 0) {
             $chunk = fread($pipes[1], 65536);
@@ -214,6 +218,10 @@ function main(array $argv): int
         for ($round = 0; $round < $rounds; $round++) {
             for ($turn = 0; $turn < count($engines); $turn++) {
                 $e = $engines[($turn + $round) % count($engines)];
+                // A figure stopped at the limit in an earlier round is not run again.
+                if (($figures[$e][$k]['line'] ?? null) === STOPPED) {
+                    continue;
+                }
                 $line = figure($opts['v8'] ?? null, $path, $k, $e, $opts['seconds'], $opts['passes']);
                 $figures[$e][$k] ??= ['each' => [], 'line' => $line];
                 $figures[$e][$k]['line'] = $line;
