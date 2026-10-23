@@ -13,6 +13,8 @@
 // Records marked v8_deviation are left out. Any difference from V8 is a wrong answer; a refusal of a valid pattern, an
 // acceptance of an invalid one, and a match that reaches its limit are counted apart and listed too. captures.jsonl is
 // judged on exec, the global search, the sticky flag, replace and split. A match is given 2 seconds.
+// ill-formed-utf8.jsonl holds bytes that are not UTF-8, each one answer over UTF-8 under each grammar the pattern is
+// valid in, whose right answer is a refusal: the extension's ValueError for a string that is not UTF-8.
 //
 // PHP's json_decode refuses a lone surrogate, which the data holds, so each lone surrogate escape is read as a code
 // point of a block of 2,048 private use code points (the block's first + its offset from U+D800) and turned back into
@@ -256,6 +258,54 @@ function judge_tests(string $name, array $r, string $pattern, Counts $c, array &
     }
 }
 
+function judge_ill_formed(array $r, string $pattern, Counts $c, array &$w): void
+{
+    $name = 'ill-formed-utf8.jsonl';
+    $flags = (string) ($r['flags'] ?? '');
+    $headPattern = shown($pattern);
+    foreach (modes_of($r) as [$suffix, , $valid]) {
+        $modeFlags = $flags . $suffix;
+        $head = "$name\t/$headPattern/$modeFlags";
+        [$re, $message, $isError] = compile_pattern($pattern, $modeFlags);
+        if ($re === null) {
+            if ($isError) {
+                $c->errors++;
+            }
+            if ($valid) {
+                $c->refused++;
+                $w[] = "REFUSED\t$head\t" . strtok((string) $message, "\r\n");
+            }
+            continue;
+        }
+        if (!$valid) {
+            $c->accepted++;
+            $w[] = "ACCEPTED-INVALID\t$head";
+            continue;
+        }
+        foreach ($r['tests'] ?? [] as $test) {
+            $hex = $test['bytes'];
+            try {
+                $got = $re->test(hex2bin($hex), 0, LIMIT);
+            } catch (MatchLimitException $e) {
+                $c->limited++;
+                $why = str_contains($e->getMessage(), 'memory') ? 'memory' : 'time';
+                $w[] = "LIMIT\t$head\t$hex\tutf8\t$why";
+                continue;
+            } catch (ValueError $e) {
+                if (str_contains($e->getMessage(), 'UTF-8')) {
+                    $c->right++;
+                } else {
+                    $c->errors++;
+                    $w[] = "ERROR\t$head\t$hex\tutf8\t" . get_class($e) . ': ' . $e->getMessage();
+                }
+                continue;
+            }
+            $c->wrong++;
+            $w[] = "WRONG\t$head\t$hex\tutf8\tread as UTF-8 (" . ($got ? 'true' : 'false') . '), not refused';
+        }
+    }
+}
+
 /** Whether a match's groups are the expected [start, end] pairs (null for a group that did not take part), the
  * expected positions mapped by $map (identity when null). */
 function same_slots(?array $expected, ?MatchResult $m, ?array $map): bool
@@ -450,6 +500,8 @@ function judge_lines(string $name, array $lines, int $k, int $n): array
         }
         if ($name === 'captures.jsonl') {
             judge_captures($r, $pattern, $c, $w);
+        } elseif ($name === 'ill-formed-utf8.jsonl') {
+            judge_ill_formed($r, $pattern, $c, $w);
         } else {
             judge_tests($name, $r, $pattern, $c, $w);
         }
