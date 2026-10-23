@@ -334,7 +334,8 @@ function judge_all(array $matches, array $all, ?array $map): bool
     $n = 0;
     foreach ($matches as $m) {
         if ($n >= count($all)) {
-            break;
+            // One match more than the data has: wrong, unless the data kept only the first twenty.
+            return count($all) === 20;
         }
         if ($all[$n] === null) {
             return false;
@@ -397,6 +398,7 @@ function judge_mode(string $where, array $a, string $text, Regex $re, Regex $g, 
     $found = $g->matchAll($u16);
     foreach ($found as $mm) {
         if ($n >= count($all)) {
+            $ok = $ok && count($all) === 20;
             break;
         }
         if (!same_slots($all[$n], $mm, null)) {
