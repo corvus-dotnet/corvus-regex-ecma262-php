@@ -3,8 +3,8 @@ name: php-publish
 # PIE looks for them, all built and tested by php-build.yml. Packagist reads the package from this repository (its
 # composer.json) and its versions from its tags, so a release is tagged with the version alone (0.1.1, as Composer and
 # PIE read it), which must be the version in Cargo.toml. `pie install corvus-dotnet/corvus-regex-ecma262` then
-# downloads the build for the PHP it installs into. A run that fails part of the way can be run again: uploading
-# replaces archives of the same names.
+# downloads the build for the PHP it installs into. A run that fails part of the way can be run again: it uploads
+# only the archives the release does not have yet. A harness release (a tag starting harness-) attaches nothing.
 on:
   release:
     types: [published]
@@ -18,6 +18,8 @@ concurrency:
 
 jobs:
   version:
+    # A harness release (a tag starting harness-) publishes the harness image alone.
+    if: ${{ !startsWith(github.event.release.tag_name, 'harness-') }}
     name: Version to publish
     runs-on: ubuntu-latest
     outputs:
@@ -70,4 +72,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$TAG" dist/*.zip --clobber -R "${{ github.repository }}"
+        # Only what the release does not have yet: an archive already attached keeps its bytes, so running the
+        # workflow again never replaces a build a program may already have installed.
+        run: |
+          have=$(gh release view "$TAG" -R "${{ github.repository }}" --json assets --jq '.assets[].name')
+          for f in dist/*.zip; do
+            if grep -qxF "$(basename "$f")" <<< "$have"; then
+              echo "already attached: $(basename "$f")"
+            else
+              gh release upload "$TAG" "$f" -R "${{ github.repository }}"
+            fi
+          done

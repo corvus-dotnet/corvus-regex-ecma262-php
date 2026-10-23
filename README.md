@@ -102,7 +102,10 @@ measured nightly on one runner with every other Corvus ECMA-262 engine.
 - `tests/api.php`: the tests; `tools/dataset.php`: the test-data runner.
 - `tools/bench`: the benchmark harness and the script the image runs; `Dockerfile`: the image the central page runs.
 
-A release is tagged with its version alone (`0.1.1`), as Composer and PIE read it, and carries every build.
+A release is tagged with its version alone (`0.1.1`), as Composer and PIE read it, and carries every build. A change
+to the benchmark harness alone needs no version: it is a harness release, `gh release create harness-<version>.<n>
+--latest=false`, which publishes the harness image and attaches no build (Composer and PIE ignore the tag, which is
+not a version).
 
 ## Licence
 
