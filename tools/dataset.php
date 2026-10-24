@@ -4,7 +4,7 @@
 // judges it:
 //
 //   php -d extension=corvus_regex_ecma262 tools/dataset.php <data directory> <wrong-cases file> [--files <glob>]
-//       [--workers N]
+//       [--workers N] [--compliance <file>]
 //
 // Each record is asked about under each grammar V8 found it valid in: the record's flags with u added (the unicode
 // answers), the record's flags alone (the legacy answers) and, in the file that has them, the flags with v added (the
@@ -15,6 +15,15 @@
 // judged on exec, the global search, the sticky flag, replace and split. A match is given 2 seconds.
 // ill-formed-utf8.jsonl holds bytes that are not UTF-8, each one answer over UTF-8 under each grammar the pattern is
 // valid in, whose right answer is a refusal: the extension's ValueError for a string that is not UTF-8.
+//
+// exec/test262.jsonl, the exec calls of test262 (in a directory of its own), is judged last: each call one exec with the
+// record's flags from its lastIndex, right when the positions of the match and of every group, the named groups and,
+// with g or y, the lastIndex after are V8's; one answer over Utf16 text and, when the text holds no lone surrogate and
+// lastIndex is not between the halves of a pair, one over the UTF-8 string with positions in bytes.
+//
+// With --compliance <file>, the engine's compliance object is written to the file, as the benchmark page reads it
+// (docs/implementing-a-source.md in corvus-regex-ecma262-benchmarks): the counts, this runner and the calls it makes in
+// each encoding, and what it leaves out, which for this extension is nothing.
 //
 // PHP's json_decode refuses a lone surrogate, which the data holds, so each lone surrogate escape is read as a code
 // point of a block of 2,048 private use code points (the block's first + its offset from U+D800) and turned back into
@@ -481,6 +490,123 @@ function judge_captures(array $r, string $pattern, Counts $c, array &$w): void
 }
 
 /** Judges the lines of a file whose index is $k modulo $n: [counts, wrong, records, skipped]. */
+const EXEC = 'exec/test262.jsonl';
+
+/** A call's lastIndex. Past the end of the text exec gives null; test262 sets it as far as 2^53 - 1 and
+ * Number.MAX_VALUE, so anything past the end reads as the text's length plus one. */
+function last_index_of(array $t, int $length): int
+{
+    $v = $t['lastIndex'];
+    return $v > $length ? $length + 1 : (int) $v;
+}
+
+/** Whether a position is between the halves of a surrogate pair, where UTF-8 has no position. */
+function inside_pair(array $u, int $at): bool
+{
+    return $at > 0 && $at < count($u) && $u[$at] >= 0xDC00 && $u[$at] <= 0xDFFF && $u[$at - 1] >= 0xD800 && $u[$at - 1] <= 0xDBFF;
+}
+
+/** Whether a match (null for none) is the call's answer: both null, or the same groups, the same named groups (present
+ * exactly when the pattern has names) and, with g or y, a lastIndex after at the match's end. $map takes the answer's
+ * UTF-16 positions to the match's. */
+function same_exec(?array $answer, ?MatchResult $m, array $names, bool $carries, array $map): bool
+{
+    if ($answer === null || $m === null) {
+        return $answer === null && $m === null;
+    }
+    $span = fn(?array $e) => $e === null ? [null, null] : [$map[$e[0]], $map[$e[1]]];
+    $captures = $answer['captures'];
+    if (count($captures) !== $m->count()) {
+        return false;
+    }
+    foreach ($captures as $g => $e) {
+        if ([$m->start($g), $m->end($g)] !== $span($e)) {
+            return false;
+        }
+    }
+    $groups = $answer['groups'] ?? null;
+    if ($groups === null) {
+        if ($names !== []) {
+            return false;
+        }
+    } else {
+        $keys = array_map('strval', array_keys($groups));
+        sort($keys);
+        $sorted = $names;
+        sort($sorted);
+        if ($keys !== $sorted) {
+            return false;
+        }
+        foreach ($groups as $n => $e) {
+            if ([$m->start((string) $n), $m->end((string) $n)] !== $span($e)) {
+                return false;
+            }
+        }
+    }
+    return !$carries || $map[$answer['lastIndex']] === $m->end(0);
+}
+
+/** A record of exec/test262.jsonl: the pattern with its own flags (g, y and d among them), from each call's lastIndex. */
+function judge_exec(array $r, string $pattern, Counts $c, array &$w): void
+{
+    $flags = (string) $r['flags'];
+    [$re, $why] = compile_pattern($pattern, $flags);
+    if ($re === null) {
+        $c->refused++;
+        $w[] = "REFUSED\t" . EXEC . "\t/" . shown($pattern) . "/$flags\t$why";
+        return;
+    }
+    $carries = str_contains($flags, 'g') || str_contains($flags, 'y');
+    $names = $re->groupNames();
+    foreach ($r['tests'] ?? [] as $t) {
+        if (!empty($t['v8_deviation'])) {
+            continue;
+        }
+        $text = $t['text'];
+        $u = units($text);
+        $start = $carries ? last_index_of($t, count($u)) : 0;
+        $where = '/' . shown($pattern) . "/$flags\t" . escape($text) . "\t" . json_encode($t['lastIndex']);
+        $runs = [['utf16', utf16($text), range(0, count($u))]];
+        if (!lone($text) && !inside_pair($u, $start)) {
+            $runs[] = ['utf8', $text, byte_offsets($text)];
+        }
+        foreach ($runs as [$encoding, $subject, $map]) {
+            try {
+                $m = $start > count($u) ? null : $re->exec($subject, $map[$start], LIMIT);
+            } catch (MatchLimitException) {
+                $c->limited++;
+                $w[] = "LIMIT\t" . EXEC . "\t$where\t$encoding";
+                continue;
+            }
+            if (same_exec($t['answer'], $m, $names, $carries, $map)) {
+                $c->right++;
+            } else {
+                $c->wrong++;
+                $w[] = "WRONG\t" . EXEC . "\t$where\t$encoding";
+            }
+        }
+    }
+}
+
+/** The engine's compliance as the benchmark page reads it: the counts, this runner and the calls it makes in each
+ * encoding, and what it leaves out. */
+function write_compliance(string $path, Counts $t): void
+{
+    $calls = fn(string $text, array $methods) => array_map(fn($m) => "Regex::$m($text)", $methods);
+    file_put_contents($path, json_encode([
+        'right' => $t->right, 'wrong' => $t->wrong, 'refused' => $t->refused, 'acceptedInvalid' => $t->accepted,
+        'limited' => $t->limited + $t->errors,
+        'judge' => [
+            'runner' => 'https://github.com/corvus-dotnet/corvus-regex-ecma262-php/blob/main/tools/dataset.php',
+            'calls' => [
+                'utf16' => $calls('Utf16', ['test', 'exec', 'matchAll', 'replace', 'split']),
+                'utf8' => $calls('string', ['test', 'exec', 'matchAll', 'replace']),
+            ],
+        ],
+        'excludes' => [],
+    ], JSON_UNESCAPED_SLASHES) . "\n");
+}
+
 function judge_lines(string $name, array $lines, int $k, int $n): array
 {
     $c = new Counts();
@@ -500,7 +626,9 @@ function judge_lines(string $name, array $lines, int $k, int $n): array
         if ($pattern === null) {
             continue;
         }
-        if ($name === 'captures.jsonl') {
+        if ($name === EXEC) {
+            judge_exec($r, $pattern, $c, $w);
+        } elseif ($name === 'captures.jsonl') {
             judge_captures($r, $pattern, $c, $w);
         } elseif ($name === 'ill-formed-utf8.jsonl') {
             judge_ill_formed($r, $pattern, $c, $w);
@@ -513,29 +641,35 @@ function judge_lines(string $name, array $lines, int $k, int $n): array
 
 function main(array $argv): int
 {
-    // A worker: php dataset.php --child <file> <k> <n>, writing its results as one serialized line.
+    // A worker: php dataset.php --child <file> <name> <k> <n>, writing its results as one serialized line.
     if (($argv[1] ?? '') === '--child') {
-        [, , $file, $k, $n] = $argv;
+        [, , $file, $name, $k, $n] = $argv;
         $lines = file($file, FILE_IGNORE_NEW_LINES);
-        echo serialize(judge_lines(basename($file), $lines, (int) $k, (int) $n));
+        echo serialize(judge_lines($name, $lines, (int) $k, (int) $n));
         return 0;
     }
     $data = $argv[1] ?? null;
     $wrongPath = $argv[2] ?? null;
     if ($wrongPath === null) {
-        fwrite(STDERR, "usage: php tools/dataset.php <data directory> <wrong-cases file> [--files glob] [--workers N]\n");
+        fwrite(STDERR, "usage: php tools/dataset.php <data directory> <wrong-cases file> [--files glob] [--workers N] [--compliance file]\n");
         return 2;
     }
     $glob = '*.jsonl';
     $workers = 4;
+    $compliance = null;
     for ($i = 3; $i + 1 < count($argv); $i += 2) {
         match ($argv[$i]) {
             '--files' => $glob = $argv[$i + 1],
             '--workers' => $workers = (int) $argv[$i + 1],
+            '--compliance' => $compliance = $argv[$i + 1],
         };
     }
     $files = array_values(array_filter(scandir($data), fn($f) => str_ends_with($f, '.jsonl') && fnmatch($glob, $f)));
     sort($files);
+    // The exec calls of test262, in a directory of their own: with the default filter, or one that names them.
+    if (($glob === '*.jsonl' || str_starts_with($glob, 'exec')) && is_file("$data/" . EXEC)) {
+        $files[] = EXEC;
+    }
     $total = new Counts();
     $wrong = [];
     $records = $skipped = 0;
@@ -553,7 +687,7 @@ function main(array $argv): int
         $file = "$data/$name";
         $procs = [];
         for ($k = 0; $k < $workers; $k++) {
-            $cmd = array_merge($php, ["-dextension=$extensionArg", "-dmemory_limit=-1", __FILE__, '--child', $file, (string) $k, (string) $workers]);
+            $cmd = array_merge($php, ["-dextension=$extensionArg", "-dmemory_limit=-1", __FILE__, '--child', $file, $name, (string) $k, (string) $workers]);
             $procs[] = proc_open($cmd, [1 => ['pipe', 'w'], 2 => STDERR], $pipes);
             $outs[$k] = $pipes[1];
         }
@@ -579,6 +713,9 @@ function main(array $argv): int
     }
     sort($wrong);
     file_put_contents($wrongPath, implode('', array_map(fn($l) => "$l\n", $wrong)));
+    if ($compliance !== null) {
+        write_compliance($compliance, $total);
+    }
     printf("\nrecords %d (skipped %d deviations)  right %d  wrong %d  refused-valid %d  accepted-invalid %d  limit %d  errors %d  in %.1fs\n",
         $records, $skipped, $total->right, $total->wrong, $total->refused, $total->accepted, $total->limited,
         $total->errors, microtime(true) - $start);

@@ -18,9 +18,9 @@ builds for PHP 8.2 to 8.5 (NTS and ZTS) on Linux (glibc and musl, x86_64 and arm
   too, so with a timeout neither a pattern nor a text from outside can make a program hang.
 
 **Compliance.** Over the [ECMA-262 test data](https://github.com/corvus-dotnet/ecma262-regex-test-data) (what V8 says
-about 123,833 patterns and 6,124,271 texts, test262's and `exec`, the global search, `replace` and `split` among them,
+about its patterns and texts, test262's patterns and `exec` calls, the global search, `replace` and `split` among them,
 and texts of bytes that are not UTF-8, which it refuses), through this extension over `Utf16` text and UTF-8 strings, it
-gives 29,689,063 right answers and none wrong, refuses no valid pattern, accepts no invalid one and reaches no limit. CI
+gives every answer right and none wrong, refuses no valid pattern, accepts no invalid one and reaches no limit. CI
 runs the whole data through every build on its platform.
 
 ## Install
