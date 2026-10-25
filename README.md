@@ -107,6 +107,20 @@ to the benchmark harness alone needs no version: it is a harness release, `gh re
 --latest=false`, which publishes the harness image and attaches no build (Composer and PIE ignore the tag, which is
 not a version).
 
+## Releasing
+
+Every merged pull request releases what it changed, unless it is labelled `no_release`. `auto-release.yml` runs
+`tools/release/release.ps1` on the merge commit: when the extension changed since its last tag (`.cargo/`,
+`Cargo.toml`, `Cargo.lock`, `composer.json`, `package.ps1` or `src/`), it makes a GitHub release tagged with the next
+patch version alone (`0.2.2`, as Composer and PIE read it), and `php-publish.yml` attaches every build to it:
+`php-build.yml` writes the version into `Cargo.toml` and `Cargo.lock` (which hold `0.0.0`; `tools/release/stamp.ps1`),
+builds and tests the extension for each PHP, platform and thread-safety mode, and the archives are named as PIE looks
+for them. Packagist reads the new tag. `harness-image.yml` publishes the harness image under the same tag. When only the
+harness changed (`Dockerfile`, `tools/bench/`, `tools/benchmarks/`), the release is `harness-<version>.<n>`, which
+publishes the image alone. A pull request that needs a minor or major version sets `nextVersion` in
+`.github/release.json` (a minor version is a breaking change). A pull request labelled `no_release` releases nothing,
+and its changes ship with the next release.
+
 ## Licence
 
 Apache-2.0. See [LICENSE](LICENSE).

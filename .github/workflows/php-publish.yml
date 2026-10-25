@@ -2,7 +2,9 @@ name: php-publish
 # Attaches every build of the corvus_regex_ecma262 PHP extension to a GitHub release when it is published, named as
 # PIE looks for them, all built and tested by php-build.yml. Packagist reads the package from this repository (its
 # composer.json) and its versions from its tags, so a release is tagged with the version alone (0.1.1, as Composer and
-# PIE read it), which must be the version in Cargo.toml. `pie install corvus-dotnet/corvus-regex-ecma262` then
+# PIE read it). auto-release.yml makes the release after a merged pull request that changed the extension, and the
+# version is the tag's: Cargo.toml and Cargo.lock hold 0.0.0, and php-build.yml writes the tag's version into them before
+# it builds (tools/release/stamp.ps1). `pie install corvus-dotnet/corvus-regex-ecma262` then
 # downloads the build for the PHP it installs into. A run that fails part of the way can be run again: it uploads
 # only the archives the release does not have yet. A harness release (a tag starting harness-) attaches nothing.
 on:
@@ -28,24 +30,23 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - name: Check the tag is the version
+      - name: Take the version from the tag
         id: check
         env:
           TAG: ${{ github.event.release.tag_name }}
         run: |
-          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
-          if [ "$TAG" != "$version" ]; then
-            echo "::error::The release's tag is $TAG but Cargo.toml says $version (the tag must be $version, as Composer reads it)."
+          if ! [[ "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::The release's tag is $TAG, which is not <major>.<minor>.<patch> (as Composer reads it)."
             exit 1
           fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build
     needs: version
     uses: ./.github/workflows/php-build.yml
     with:
-      version: ${{ needs.version.outputs.version }}
+      tag: ${{ github.event.release.tag_name }}
 
   publish:
     name: Attach the builds to the release

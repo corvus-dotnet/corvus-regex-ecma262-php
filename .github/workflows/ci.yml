@@ -25,6 +25,17 @@ jobs:
           php-version: '8.4'
           coverage: none
           tools: none
+      - name: bindgen's libclang
+        # ext-php-rs's bindgen loads the newest libclang it finds, and takes the system headers from the runner's clang.
+        # A runner with several LLVMs (Ubuntu 26.04 has 20, 21 and 22) pairs a libclang with another version's
+        # intrinsics headers, which it cannot parse. The libclang of the runner's clang is the one whose headers it reads.
+        if: runner.os == 'Linux'
+        run: |
+          major=$(clang -dumpversion | cut -d. -f1)
+          ls -d /usr/lib/llvm-*/lib/libclang.so* 2>/dev/null || true
+          test -d "/usr/lib/llvm-$major/lib"
+          echo "clang $(clang -dumpversion): LIBCLANG_PATH=/usr/lib/llvm-$major/lib"
+          echo "LIBCLANG_PATH=/usr/lib/llvm-$major/lib" >> "$GITHUB_ENV"
       - name: Format and clippy
         # The toolchain is named here rather than in a rust-toolchain.toml, which would override the nightly the
         # Windows builds need.
@@ -35,7 +46,10 @@ jobs:
 
   builds:
     name: Builds
+    # The probe tag runs the release's stamping (tools/release/stamp.ps1) in every build, as a release runs it.
     uses: ./.github/workflows/php-build.yml
+    with:
+      tag: 99.98.97
 
   gate:
     # The one check of this workflow that the ruleset of main requires: it passes when every job above passed (or was

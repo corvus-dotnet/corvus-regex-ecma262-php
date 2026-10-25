@@ -15,8 +15,10 @@ name: php-build
 on:
   workflow_call:
     inputs:
-      version:
-        description: The version in the archives' names (default, the version in Cargo.toml).
+      tag:
+        # A release's tag (php-publish.yml): its version is written into Cargo.toml and Cargo.lock, which hold 0.0.0,
+        # before the build (tools/release/stamp.ps1), and so names the archives. CI passes 99.98.97, so that the
+        # stamping runs in every build of every pull request, as a release runs it.
         type: string
         default: ''
 
@@ -75,6 +77,12 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+      - name: Write the release's version
+        if: inputs.tag != ''
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag }}
+        run: ./tools/release/stamp.ps1 -Tag $env:TAG
       - name: Checkout the ECMA-262 test data
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -99,14 +107,24 @@ jobs:
         run: |
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
           rustup default "$RUST_TOOLCHAIN"
+      - name: bindgen's libclang
+        # ext-php-rs's bindgen loads the newest libclang it finds, and takes the system headers from the runner's clang.
+        # A runner with several LLVMs (Ubuntu 26.04 has 20, 21 and 22) pairs a libclang with another version's
+        # intrinsics headers, which it cannot parse. The libclang of the runner's clang is the one whose headers it reads.
+        if: runner.os == 'Linux'
+        run: |
+          major=$(clang -dumpversion | cut -d. -f1)
+          ls -d /usr/lib/llvm-*/lib/libclang.so* 2>/dev/null || true
+          test -d "/usr/lib/llvm-$major/lib"
+          echo "clang $(clang -dumpversion): LIBCLANG_PATH=/usr/lib/llvm-$major/lib"
+          echo "LIBCLANG_PATH=/usr/lib/llvm-$major/lib" >> "$GITHUB_ENV"
       - name: Build and package
         id: package
         shell: pwsh
         env:
           GLIBC: ${{ matrix.glibc }}
-          VERSION: ${{ inputs.version }}
         run: |
-          $archive = ./package.ps1 -Glibc $env:GLIBC -Version $env:VERSION -OutDir dist | Select-Object -Last 1
+          $archive = ./package.ps1 -Glibc $env:GLIBC -OutDir dist | Select-Object -Last 1
           "archive=$archive" >> $env:GITHUB_OUTPUT
           "name=$([System.IO.Path]::GetFileNameWithoutExtension($archive))" >> $env:GITHUB_OUTPUT
       - name: Test the packaged extension
@@ -140,6 +158,12 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+      - name: Write the release's version
+        if: inputs.tag != ''
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag }}
+        run: ./tools/release/stamp.ps1 -Tag $env:TAG
       - name: Checkout the ECMA-262 test data
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -151,11 +175,10 @@ jobs:
         id: package
         env:
           IMAGE: php:${{ matrix.php }}-${{ matrix.ts == 'ts' && 'zts' || 'cli' }}-alpine
-          VERSION: ${{ inputs.version }}
         # The archive is named as package.ps1 names it (PowerShell has no build for musl on arm64).
         run: |
           mkdir -p dist
-          docker run --rm -v "$PWD:/w" -w /w -e VERSION -e "UID=$(id -u)" -e "GID=$(id -g)" \
+          docker run --rm -v "$PWD:/w" -w /w -e "UID=$(id -u)" -e "GID=$(id -g)" \
             -e RUST_TOOLCHAIN "$IMAGE" sh -euc '
               apk add --no-cache build-base clang-dev curl zip >/dev/null
               curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal --default-toolchain "$RUST_TOOLCHAIN"
@@ -172,7 +195,7 @@ jobs:
               if readelf -d "$ext" | grep -q "NEEDED.*libgcc_s"; then echo "the extension needs libgcc_s" >&2; exit 1; fi
               php -d "extension=$PWD/$ext" -r "echo PHP_VERSION, PHP_ZTS ? \" ZTS\" : \" NTS\", PHP_EOL;"
               CORVUS_REGEX_PHP_EXTENSION="$PWD/$ext" php -d "extension=$PWD/$ext" tests/api.php
-              version=${VERSION:-$(sed -n "s/^version = \"\(.*\)\"$/\1/p" Cargo.toml | head -n 1)}
+              version=$(sed -n "s/^version = \"\(.*\)\"$/\1/p" Cargo.toml | head -n 1)
               arch=$(uname -m | sed "s/aarch64/arm64/")
               zts=$(php -r "echo PHP_ZTS ? \"-zts\" : \"\";")
               name="php_corvus_regex_ecma262-${version}_php$(php -r "echo PHP_MAJOR_VERSION, \".\", PHP_MINOR_VERSION;")-$arch-linux-musl$zts"
@@ -216,6 +239,12 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+      - name: Write the release's version
+        if: inputs.tag != ''
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag }}
+        run: ./tools/release/stamp.ps1 -Tag $env:TAG
       - name: Checkout the ECMA-262 test data
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -241,10 +270,8 @@ jobs:
       - name: Build and package
         id: package
         shell: pwsh
-        env:
-          VERSION: ${{ inputs.version }}
         run: |
-          $archive = ./package.ps1 -Version $env:VERSION -OutDir dist | Select-Object -Last 1
+          $archive = ./package.ps1 -OutDir dist | Select-Object -Last 1
           "archive=$archive" >> $env:GITHUB_OUTPUT
           "name=$([System.IO.Path]::GetFileNameWithoutExtension($archive))" >> $env:GITHUB_OUTPUT
       - name: Test the packaged extension
