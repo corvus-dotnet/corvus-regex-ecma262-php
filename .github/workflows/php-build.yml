@@ -17,8 +17,8 @@ on:
     inputs:
       tag:
         # A release's tag (php-publish.yml): its version is written into Cargo.toml and Cargo.lock, which hold 0.0.0,
-        # before the build (tools/release/stamp.ps1), and so names the archives. Empty for CI, which builds the
-        # placeholder.
+        # before the build (tools/release/stamp.ps1), and so names the archives. CI passes 99.98.97, so that the
+        # stamping runs in every build of every pull request, as a release runs it.
         type: string
         default: ''
 
