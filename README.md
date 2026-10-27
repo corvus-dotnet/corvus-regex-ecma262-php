@@ -62,9 +62,9 @@ $date->exec(Utf16::fromUtf8('café 2026-12'))->start();   // 5
 
 | | |
 |---|---|
-| `new Regex($pattern, $flags = '', $timeout = null)` | Compiles a pattern as `new RegExp($pattern, $flags)` does. `$timeout` is the match timeout in seconds (0 for none; `null` for the default). |
+| `new Regex($pattern, $flags = '', $timeout = null, $edition = 'current', $unicode_version = null)` | Compiles a pattern as `new RegExp($pattern, $flags)` does. `$timeout` is the match timeout in seconds (0 for none; `null` for the default). `$edition` and `$unicode_version` are below. |
 | `Regex::setDefaultTimeout($seconds)`, `Regex::defaultTimeout()` | The timeout of every pattern compiled without one: `null` (no limit) unless set. |
-| `Regex::isValid($pattern, $flags = '')` | Whether a pattern is valid, without compiling it. |
+| `Regex::isValid($pattern, $flags = '', $edition = 'current', $unicode_version = null)` | Whether a pattern is valid, without compiling it. |
 | `test($subject, $offset = 0, $timeout = null)` | `RegExp.prototype.test` with `lastIndex` at `$offset` (at `$offset` alone with `y`). |
 | `exec($subject, $offset = 0, $timeout = null)` | The first match at or after `$offset`, as `exec` finds it: a `MatchResult`, or `null`. |
 | `matchAll($subject)` | A global search as `matchAll` makes it: an array of `MatchResult`. |
@@ -72,7 +72,8 @@ $date->exec(Utf16::fromUtf8('café 2026-12'))->start();   // 5
 | `replace($subject, $replacement)` | `String.prototype.replace`: the first match, or every match with `g`; a template or a callable. |
 | `replaceAll($subject, $replacement)` | `String.prototype.replaceAll`: every match. |
 | `split($subject, $limit = null)` | `String.prototype.split`: an array of strings, `null` for a group that did not take part. |
-| `source()`, `flags()`, `timeout()`, `groupCount()`, `groupNames()` | What the pattern is. |
+| `source()`, `flags()`, `timeout()`, `edition()`, `unicodeVersion()`, `groupCount()`, `groupNames()` | What the pattern is. |
+| `Regex::unicodeVersions()`, `Regex::DEFAULT_UNICODE_VERSION`, `Regex::LATEST_UNICODE_VERSION` | The versions of Unicode the extension carries, `[13, 17, 18]`, the default (17) and the latest (18). |
 
 A `MatchResult` has `group($g = 0)`, `start($g = 0)` and `end($g = 0)` (a group by number or name; `null` when it did
 not take part), `groups()` (the array `preg_match` fills: the match, then each group) and `namedGroups()`. A subject is
@@ -89,6 +90,24 @@ pattern compiled after it `Regex::setDefaultTimeout(1.0)`. Every method that mat
 timeout and throws `MatchLimitException` at it; `test` and `exec` take a `$timeout` of their own in its place. Without
 a timeout (the default) a match has no limit of time or of memory, so a program that matches a pattern or a subject it
 did not write should set one.
+
+**The edition and the version of Unicode.** Two settings, each independent of the other, are settled when a pattern is
+compiled and cost a match nothing:
+
+- `edition: 'es2020'` reads the pattern with the grammar of ECMAScript 2020, which JSON Schema 2020-12 names. It refuses
+  what later editions added, and nothing else: the `d` and `v` flags (`InvalidFlagsException`), modifier groups such as
+  `(?i:...)`, a group name used by two groups, and a property name or value that is not in that edition's tables, such
+  as `\p{Script=Yezidi}` (each `InvalidPatternException`). A pattern it accepts has the same answers as in today's
+  grammar. `'current'`, the default, is today's grammar.
+- `unicode_version:` is the version of Unicode whose tables the pattern is read with: the members of each `\p{...}`,
+  the characters of a group name, and case folding. It is `null` (the default: the version of the V8 the answers are
+  held to, 17 today), 13, 17, 18 or `'latest'` (18 today). `unicodeVersion()` gives the version it resolved to.
+
+Either outside those values throws a `ValueError`.
+
+```php
+$re = new Regex('^\p{L}+$', 'u', 1.0, edition: 'es2020', unicode_version: 13);
+```
 
 ## Benchmarks
 

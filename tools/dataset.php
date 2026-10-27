@@ -4,7 +4,7 @@
 // judges it:
 //
 //   php -d extension=corvus_regex_ecma262 tools/dataset.php <data directory> <wrong-cases file> [--files <glob>]
-//       [--workers N] [--compliance <file>]
+//       [--workers N] [--compliance <file>] [--edition current|es2020] [--unicode 13|17|18|latest]
 //
 // Each record is asked about under each grammar V8 found it valid in: the record's flags with u added (the unicode
 // answers), the record's flags alone (the legacy answers) and, in the file that has them, the flags with v added (the
@@ -21,6 +21,11 @@
 // with g or y, the lastIndex after are V8's; one answer over Utf16 text and, when the text holds no lone surrogate and
 // lastIndex is not between the halves of a pair, one over the UTF-8 string with positions in bytes.
 //
+// --edition and --unicode compile every pattern with that edition and version of Unicode, for the data as its own
+// scripts write it for them (edition.js apply and unicode.js apply in the data repository); the workers read them from
+// CORVUS_REGEX_EDITION and CORVUS_REGEX_UNICODE, which main sets. Under es2020 a refusal of the d or v flag is a
+// refusal of the pattern, as the data's overlay counts it.
+//
 // With --compliance <file>, the engine's compliance object is written to the file, as the benchmark page reads it
 // (docs/implementing-a-source.md in corvus-regex-ecma262-benchmarks): the counts, this runner and the calls it makes in
 // each encoding, and what it leaves out, which for this extension is nothing.
@@ -34,7 +39,7 @@
 // this script, each given a share of a file's records.
 declare(strict_types=1);
 
-use Corvus\RegexEcma262\{InvalidPatternException, MatchLimitException, MatchResult, PatternTooLargeException, Regex,
+use Corvus\RegexEcma262\{InvalidFlagsException, InvalidPatternException, MatchLimitException, MatchResult, PatternTooLargeException, Regex,
     RegexException, Utf16};
 
 const LIMIT = 2.0;
@@ -190,13 +195,28 @@ final class Counts
     }
 }
 
+/** The edition and the version of Unicode every pattern is compiled with (--edition, --unicode). */
+function settings(): array
+{
+    static $settings = null;
+    if ($settings === null) {
+        $unicode = getenv('CORVUS_REGEX_UNICODE') ?: null;
+        $settings = [getenv('CORVUS_REGEX_EDITION') ?: 'current',
+            $unicode === null || $unicode === 'latest' ? $unicode : (int) $unicode];
+    }
+    return $settings;
+}
+
 /** [regex or null, message, is_error] */
 function compile_pattern(string $pattern, string $flags): array
 {
+    [$edition, $unicode] = settings();
     try {
-        return [new Regex(utf8_lossy($pattern), $flags), null, false];
+        return [new Regex(utf8_lossy($pattern), $flags, edition: $edition, unicode_version: $unicode), null, false];
     } catch (InvalidPatternException $e) {
         return [null, 'PARSE: ' . $e->getMessage(), false];
+    } catch (InvalidFlagsException $e) {
+        return $edition === 'es2020' ? [null, 'FLAGS: ' . $e->getMessage(), false] : [null, 'ERROR: ' . $e->getMessage(), true];
     } catch (PatternTooLargeException $e) {
         return [null, 'TOO-LARGE: ' . $e->getMessage(), false];
     } catch (RegexException $e) {
@@ -651,7 +671,7 @@ function main(array $argv): int
     $data = $argv[1] ?? null;
     $wrongPath = $argv[2] ?? null;
     if ($wrongPath === null) {
-        fwrite(STDERR, "usage: php tools/dataset.php <data directory> <wrong-cases file> [--files glob] [--workers N] [--compliance file]\n");
+        fwrite(STDERR, "usage: php tools/dataset.php <data directory> <wrong-cases file> [--files glob] [--workers N] [--compliance file] [--edition current|es2020] [--unicode 13|17|18|latest]\n");
         return 2;
     }
     $glob = '*.jsonl';
@@ -662,6 +682,8 @@ function main(array $argv): int
             '--files' => $glob = $argv[$i + 1],
             '--workers' => $workers = (int) $argv[$i + 1],
             '--compliance' => $compliance = $argv[$i + 1],
+            '--edition' => putenv('CORVUS_REGEX_EDITION=' . $argv[$i + 1]),
+            '--unicode' => putenv('CORVUS_REGEX_UNICODE=' . $argv[$i + 1]),
         };
     }
     $files = array_values(array_filter(scandir($data), fn($f) => str_ends_with($f, '.jsonl') && fnmatch($glob, $f)));
