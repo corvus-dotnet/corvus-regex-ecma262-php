@@ -75,6 +75,27 @@ fn limit_of(timeout: Option<f64>) -> Option<Duration> {
     timeout.map(|t| Duration::from_secs_f64(t.max(0.0)))
 }
 
+/// The edition a PHP value names: null or "current" (today's grammar, the default), or "es2020".
+fn edition_of(edition: Option<&str>) -> PhpResult<ecma::Edition> {
+    match edition.unwrap_or("current") {
+        "current" => Ok(ecma::Edition::Current),
+        "es2020" => Ok(ecma::Edition::Es2020),
+        _ => Err(value_error("the edition must be 'current' or 'es2020'")),
+    }
+}
+
+/// The version of Unicode a PHP value names: null (V8's, 17 today), 13, 17, 18 or "latest" (18 today).
+fn unicode_version_of(version: Option<&Zval>) -> PhpResult<ecma::UnicodeVersion> {
+    let Some(v) = version.filter(|v| !v.is_null()) else { return Ok(ecma::UnicodeVersion::Default) };
+    match (v.long(), v.str()) {
+        (Some(13), _) => Ok(ecma::UnicodeVersion::V13),
+        (Some(17), _) => Ok(ecma::UnicodeVersion::V17),
+        (Some(18), _) => Ok(ecma::UnicodeVersion::V18),
+        (_, Some("latest")) => Ok(ecma::UnicodeVersion::Latest),
+        _ => Err(value_error("the Unicode version must be null, 13, 17, 18 or 'latest'")),
+    }
+}
+
 /// A timeout in seconds, null for none.
 fn seconds_of(timeout: Option<Duration>) -> Option<f64> {
     timeout.map(|t| t.as_secs_f64())
@@ -450,18 +471,40 @@ impl Regex {
 
 #[php_impl]
 impl Regex {
+    /// The version of Unicode a pattern is read with by default: the version of the V8 the answers are held to.
+    const DEFAULT_UNICODE_VERSION: i64 = 17;
+    /// The newest version of Unicode the extension carries, which 'latest' stands for.
+    const LATEST_UNICODE_VERSION: i64 = 18;
+
     /// Compiles a pattern with the flags `new RegExp($pattern, $flags)` takes, any of dgimsuvy. Throws
     /// InvalidPatternException, InvalidFlagsException or PatternTooLargeException (each a RegexException). $timeout is
     /// the time in seconds each match may take before it is abandoned with MatchLimitException (0 for none); null takes
     /// Regex::defaultTimeout(), which is none unless set. A timeout also caps the backtracking memory of a match;
     /// without one a match has no limit of time or of memory, so give a pattern or a text from outside one.
-    pub fn __construct(pattern: &str, flags: Option<&str>, timeout: Option<f64>) -> PhpResult<Regex> {
-        let flags = flags.unwrap_or("");
-        let inner = match limit_of(timeout) {
-            None => ecma::Regex::new(pattern, flags),
-            Some(t) => ecma::Flags::parse(flags).and_then(|f| ecma::Regex::with_timeout(pattern, f, Some(t))),
+    ///
+    /// $edition is the grammar the pattern is read with: 'current' (today's, the default) or 'es2020', the grammar of
+    /// ECMAScript 2020, which JSON Schema 2020-12 names. It refuses what later editions added, and nothing else: the d
+    /// and v flags (InvalidFlagsException), modifier groups such as (?i:...), a group name used by two groups, and a
+    /// property name or value that is not in that edition's tables (InvalidPatternException). $unicode_version is the
+    /// version of Unicode whose tables the pattern is read with: null (the default, DEFAULT_UNICODE_VERSION), 13, 17, 18
+    /// or 'latest' (LATEST_UNICODE_VERSION). Each is independent of the other; both are settled here, and cost a match
+    /// nothing. A value of either outside those throws a ValueError.
+    pub fn __construct(
+        pattern: &str,
+        flags: Option<&str>,
+        timeout: Option<f64>,
+        edition: Option<&str>,
+        unicode_version: Option<&Zval>,
+    ) -> PhpResult<Regex> {
+        let mut builder = ecma::RegexBuilder::new(pattern);
+        builder
+            .flags(flags.unwrap_or(""))
+            .edition(edition_of(edition)?)
+            .unicode_version(unicode_version_of(unicode_version)?);
+        if let Some(t) = limit_of(timeout) {
+            builder.match_timeout(Some(t));
         }
-        .map_err(compile_error)?;
+        let inner = builder.build().map_err(compile_error)?;
         let written = format!("{}", inner.flags());
         let names = inner.group_names().map(str::to_owned).collect();
         Ok(Regex {
@@ -489,9 +532,36 @@ impl Regex {
         seconds_of(self.inner.match_timeout())
     }
 
-    /// Whether a pattern is valid with the flags, without compiling it.
-    pub fn is_valid(pattern: &str, flags: Option<&str>) -> bool {
-        ecma::Regex::is_valid(pattern, flags.unwrap_or(""))
+    /// Whether a pattern is valid with the flags, in the edition and the version of Unicode (as the constructor takes
+    /// them), without compiling it.
+    pub fn is_valid(
+        pattern: &str,
+        flags: Option<&str>,
+        edition: Option<&str>,
+        unicode_version: Option<&Zval>,
+    ) -> PhpResult<bool> {
+        let edition = edition_of(edition)?;
+        let unicode_version = unicode_version_of(unicode_version)?;
+        Ok(ecma::Flags::parse(flags.unwrap_or(""))
+            .is_ok_and(|f| ecma::Regex::is_valid_with(pattern, f, edition, unicode_version)))
+    }
+
+    /// The edition whose grammar the pattern was read with: 'current' or 'es2020'.
+    pub fn edition(&self) -> &'static str {
+        match self.inner.edition() {
+            ecma::Edition::Es2020 => "es2020",
+            _ => "current",
+        }
+    }
+
+    /// The version of Unicode whose tables the pattern was read with, resolved: 13, 17 or 18.
+    pub fn unicode_version(&self) -> i64 {
+        i64::from(self.inner.unicode_version().major())
+    }
+
+    /// The versions of Unicode the extension carries, each a set of tables a pattern can be read with.
+    pub fn unicode_versions() -> Vec<i64> {
+        vec![13, 17, 18]
     }
 
     /// The pattern as it was given.
@@ -632,7 +702,7 @@ impl Regex {
 #[php_function]
 #[php(name = "Corvus\\RegexEcma262\\crate_version")]
 pub fn crate_version() -> &'static str {
-    "0.2.1"
+    "0.2.3"
 }
 
 #[php_module]

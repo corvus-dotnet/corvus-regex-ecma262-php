@@ -218,7 +218,74 @@ if (PHP_OS_FAMILY === 'Windows' || $extension === false) {
     check('small stack', 'matched, too large, too large', implode("\n", $lines));
 }
 
-check('crate version', '0.2.1', \Corvus\RegexEcma262\crate_version());
+// The edition and the version of Unicode, each independent of the other
+$re = new Regex('a');
+check('default edition', 'current', $re->edition());
+check('default unicode version', 17, $re->unicodeVersion());
+check('DEFAULT_UNICODE_VERSION', 17, Regex::DEFAULT_UNICODE_VERSION);
+check('LATEST_UNICODE_VERSION', 18, Regex::LATEST_UNICODE_VERSION);
+check('unicode versions', [13, 17, 18], Regex::unicodeVersions());
+foreach ([[null, 17], [13, 13], [17, 17], [18, 18], ['latest', 18]] as [$asked, $resolved]) {
+    check('resolved ' . var_export($asked, true), $resolved, (new Regex('a', unicode_version: $asked))->unicodeVersion());
+}
+foreach ([12, 19, '18', 'default', 17.0] as $bad) {
+    throws('bad unicode version ' . var_export($bad, true), ValueError::class, fn() => new Regex('a', unicode_version: $bad));
+    throws('bad unicode version, isValid', ValueError::class, fn() => Regex::isValid('a', unicode_version: $bad));
+}
+throws('bad edition', ValueError::class, fn() => new Regex('a', edition: 'es2022'));
+throws('bad edition, isValid', ValueError::class, fn() => Regex::isValid('a', edition: 'ES2020'));
+foreach ([['\p{Script=Vithkuqi}', 13, false], ['\p{Script=Vithkuqi}', null, true], ['\p{Script=Yezidi}', 13, true],
+          ['\p{Script=Jurchen}', null, false], ['\p{scx=Jurc}', 18, true], ['\p{Script=Jurchen}', 'latest', true]]
+         as [$pattern, $version, $valid]) {
+    check("$pattern valid in " . var_export($version, true), $valid, Regex::isValid($pattern, 'u', unicode_version: $version));
+    if (!$valid) {
+        throws("$pattern refused", InvalidPatternException::class, fn() => new Regex($pattern, 'u', unicode_version: $version));
+    }
+}
+$letter = "\u{10597}";
+check('Ll in 17', true, (new Regex('^\p{Ll}$', 'u'))->test($letter));
+check('Ll in 13', false, (new Regex('^\p{Ll}$', 'u', unicode_version: 13))->test($letter));
+check('fold in 17', true, (new Regex("\u{10570}", 'iu'))->test($letter));
+check('fold in 13', false, (new Regex("\u{10570}", 'iu', unicode_version: 13))->test($letter));
+check('fold without u in 17', true, (new Regex("\u{A7C0}", 'i'))->test("\u{A7C1}"));
+check('fold without u in 13', false, (new Regex("\u{A7C0}", 'i', unicode_version: 13))->test("\u{A7C1}"));
+foreach ([['iu', "\u{10570}\u{10597}"], ['i', "\u{A7C0}\u{A7C1}"]] as [$flags, $text]) {
+    $twice = mb_substr($text, 0, 1) . mb_substr($text, 0, 1);
+    foreach (['(.)\1', '(?<=\1(.))', '(?:x|(.))+\1$'] as $pattern) {
+        foreach ([17, 18] as $version) {
+            $r = new Regex($pattern, $flags, unicode_version: $version);
+            check("$pattern /$flags under $version", true, $r->test($text));
+            check("$pattern /$flags over UTF-16 under $version", true, $r->test(Utf16::fromUtf8($text)));
+        }
+        $r = new Regex($pattern, $flags, unicode_version: 13);
+        check("$pattern /$flags under 13", false, $r->test($text));
+        check("$pattern /$flags over UTF-16 under 13", false, $r->test(Utf16::fromUtf8($text)));
+        check("$pattern /$flags under 13, the same letter twice", true, $r->test($twice));
+        check("$pattern /$flags exec under 13", null, $r->exec($text));
+    }
+}
+foreach ([['(?i:a)', ''], ['(?-i:a)', 'i'], ['(?s:.)', 'u'], ['(?<a>x)|(?<a>y)', ''], ['(?<a>x)|(?<a>y)', 'u'],
+          ['\p{Script=Yezidi}', 'u'], ['\p{sc=Vith}', 'u'], ['\p{Script_Extensions=Toto}', 'u']] as [$pattern, $flags]) {
+    throws("$pattern /$flags in 2020", InvalidPatternException::class,
+        fn() => new Regex($pattern, $flags, edition: 'es2020', unicode_version: 'latest'));
+    check("$pattern /$flags not valid in 2020", false, Regex::isValid($pattern, $flags, 'es2020', 'latest'));
+    check("$pattern /$flags today", 'current', (new Regex($pattern, $flags, unicode_version: 'latest'))->edition());
+}
+foreach ([['\p{Script=Greek}', 'u'], ['\p{L}\p{gc=Lu}\p{Lowercase}', 'u'], ['\P{scx=Latn}', 'iu'], ['\p{Script=Yezidi}', ''],
+          ['(?<a>x)(?<b>y)\k<a>', 'u'], ['(?<=a)(?<!b)', 's'], ['(?:i)', '']] as [$pattern, $flags]) {
+    $r = new Regex($pattern, $flags, edition: 'es2020', unicode_version: 13);
+    check("$pattern /$flags in 2020", ['es2020', 13], [$r->edition(), $r->unicodeVersion()]);
+}
+foreach (['d', 'v', 'dv', 'gv'] as $flags) {
+    throws("/$flags in 2020", InvalidFlagsException::class, fn() => new Regex('a', $flags, edition: 'es2020'));
+    check("/$flags not valid in 2020", false, Regex::isValid('a', $flags, edition: 'es2020'));
+    check("/$flags today", $flags === 'gv' ? 'gv' : $flags, (new Regex('a', $flags))->flags());
+}
+$timed = new Regex('^(?:(a+)\1*)+$', 'u', 0.03, 'es2020', 13);
+check('the settings and a timeout', [0.03, 'es2020', 13], [$timed->timeout(), $timed->edition(), $timed->unicodeVersion()]);
+throws('the settings and a timeout, the limit', MatchLimitException::class, fn() => $timed->test(str_repeat('a', 60) . 'b'));
+
+check('crate version', '0.2.3', \Corvus\RegexEcma262\crate_version());
 check('extension loaded', true, extension_loaded('corvus_regex_ecma262'));
 
 echo "$checks checks, " . count($failures) . " failed\n";
