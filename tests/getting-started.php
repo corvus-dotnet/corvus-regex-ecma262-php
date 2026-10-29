@@ -9,7 +9,8 @@ if (ini_get('zend.assertions') !== '1' || !ini_get('assert.exception')) {
     exit(1);
 }
 
-$page = file_get_contents(__DIR__ . '/../docs/getting-started.md');
+// A checkout on Windows may have CRLF line endings.
+$page = str_replace("\r\n", "\n", file_get_contents(__DIR__ . '/../docs/getting-started.md'));
 preg_match_all('/^```php\n(.*?)^```$/ms', $page, $blocks, PREG_OFFSET_CAPTURE);
 if (count($blocks[1]) < 5) {
     fwrite(STDERR, 'The page has ' . count($blocks[1]) . " examples.\n");
