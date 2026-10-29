@@ -139,6 +139,7 @@ jobs:
             echo "Needs: $(objdump -T "$ext" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1)"
           fi
           CORVUS_REGEX_PHP_EXTENSION="$ext" php -d "extension=$ext" tests/api.php
+          CORVUS_REGEX_PHP_EXTENSION="$ext" php -d "extension=$ext" -d zend.assertions=1 -d assert.exception=1 tests/getting-started.php
           CORVUS_REGEX_PHP_EXTENSION="$ext" php -d memory_limit=-1 -d "extension=$ext" tools/dataset.php ecma262-regex-test-data/data wrong-cases.tsv
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: matrix.name == 'linux x86_64' && matrix.php == '8.5' && matrix.ts == 'nts'
@@ -225,6 +226,7 @@ jobs:
               if readelf -d "$ext" | grep -q "NEEDED.*libgcc_s"; then echo "the extension needs libgcc_s" >&2; exit 1; fi
               php -d "extension=$PWD/$ext" -r "echo PHP_VERSION, PHP_ZTS ? \" ZTS\" : \" NTS\", PHP_EOL;"
               CORVUS_REGEX_PHP_EXTENSION="$PWD/$ext" php -d "extension=$PWD/$ext" tests/api.php
+              CORVUS_REGEX_PHP_EXTENSION="$PWD/$ext" php -d "extension=$PWD/$ext" -d zend.assertions=1 -d assert.exception=1 tests/getting-started.php
               version=$(sed -n "s/^version = \"\(.*\)\"$/\1/p" Cargo.toml | head -n 1)
               arch=$(uname -m | sed "s/aarch64/arm64/")
               zts=$(php -r "echo PHP_ZTS ? \"-zts\" : \"\";")
@@ -247,6 +249,7 @@ jobs:
           mkdir -p ext && unzip -o -q "$ARCHIVE" -d ext
           docker run --rm -v "$PWD:/w" -w /w "$IMAGE" sh -euc '
             CORVUS_REGEX_PHP_EXTENSION=/w/ext/corvus_regex_ecma262.so php -d extension=/w/ext/corvus_regex_ecma262.so tests/api.php
+            CORVUS_REGEX_PHP_EXTENSION=/w/ext/corvus_regex_ecma262.so php -d extension=/w/ext/corvus_regex_ecma262.so -d zend.assertions=1 -d assert.exception=1 tests/getting-started.php
             CORVUS_REGEX_PHP_EXTENSION=/w/ext/corvus_regex_ecma262.so php -d memory_limit=-1 \
               -d extension=/w/ext/corvus_regex_ecma262.so tools/dataset.php ecma262-regex-test-data/data wrong-cases.tsv
           '
@@ -316,6 +319,7 @@ jobs:
           php -d "extension=$ext" -r 'echo PHP_VERSION, PHP_ZTS ? " ZTS" : " NTS", ": corvus-regex-ecma262 ", Corvus\RegexEcma262\crate_version(), "\n";'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           php -d "extension=$ext" tests/api.php
+          php -d "extension=$ext" -d zend.assertions=1 -d assert.exception=1 tests/getting-started.php
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:CORVUS_REGEX_PHP_EXTENSION = $ext
           php -d memory_limit=-1 -d "extension=$ext" tools/dataset.php ecma262-regex-test-data/data wrong-cases.tsv

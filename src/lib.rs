@@ -21,30 +21,35 @@ use ext_php_rs::zend::ce;
 // ---------------------------------------------------------------------------------------------------------------------
 // Exceptions
 
+/// What every failure of the extension throws: a pattern that is not valid, or a match that reached its limit.
 #[php_class]
 #[php(name = "Corvus\\RegexEcma262\\RegexException")]
 #[php(extends(ce = ce::exception, stub = "\\Exception"))]
 #[derive(Default)]
 pub struct RegexException;
 
+/// The pattern is not valid in the grammar of its flags (new RegExp would throw a SyntaxError).
 #[php_class]
 #[php(name = "Corvus\\RegexEcma262\\InvalidPatternException")]
 #[php(extends(RegexException))]
 #[derive(Default)]
 pub struct InvalidPatternException;
 
+/// A letter that is not one of dgimsuvy, a flag given twice, u with v, or d or v under the 2020 edition.
 #[php_class]
 #[php(name = "Corvus\\RegexEcma262\\InvalidFlagsException")]
 #[php(extends(RegexException))]
 #[derive(Default)]
 pub struct InvalidFlagsException;
 
+/// The pattern is over a limit of size: its length, the depth its groups nest to, or its size as it is read.
 #[php_class]
 #[php(name = "Corvus\\RegexEcma262\\PatternTooLargeException")]
 #[php(extends(RegexException))]
 #[derive(Default)]
 pub struct PatternTooLargeException;
 
+/// A match reached its timeout or its cap on backtracking memory, so there is no answer.
 #[php_class]
 #[php(name = "Corvus\\RegexEcma262\\MatchLimitException")]
 #[php(extends(RegexException))]
