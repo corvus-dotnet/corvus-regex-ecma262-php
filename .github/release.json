@@ -9,7 +9,11 @@
         "Cargo.lock",
         "composer.json",
         "package.ps1",
-        "src/"
+        "src/",
+        "docs/getting-started.md",
+        "docs/api.md",
+        "docs/design.md",
+        "docs/contributing.md"
       ],
       "stamp": [
         {
