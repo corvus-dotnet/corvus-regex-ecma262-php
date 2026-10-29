@@ -707,7 +707,7 @@ impl Regex {
 #[php_function]
 #[php(name = "Corvus\\RegexEcma262\\crate_version")]
 pub fn crate_version() -> &'static str {
-    "0.2.3"
+    "0.2.5"
 }
 
 #[php_module]

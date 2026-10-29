@@ -285,7 +285,7 @@ $timed = new Regex('^(?:(a+)\1*)+$', 'u', 0.03, 'es2020', 13);
 check('the settings and a timeout', [0.03, 'es2020', 13], [$timed->timeout(), $timed->edition(), $timed->unicodeVersion()]);
 throws('the settings and a timeout, the limit', MatchLimitException::class, fn() => $timed->test(str_repeat('a', 60) . 'b'));
 
-check('crate version', '0.2.3', \Corvus\RegexEcma262\crate_version());
+check('crate version', '0.2.5', \Corvus\RegexEcma262\crate_version());
 check('extension loaded', true, extension_loaded('corvus_regex_ecma262'));
 
 echo "$checks checks, " . count($failures) . " failed\n";
